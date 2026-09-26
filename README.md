@@ -21,43 +21,30 @@ Codex and Claude Code can both use jevcomp on the same computer. They share the 
 
 ### Install
 
-Pick one way.
-
-**Plugin (recommended).** In a terminal:
-
-```bash
-codex plugin marketplace add jevcomp/jevcomp
-codex plugin add jevcomp@jevcomp
-```
-
-Then, in Codex, ask `Configure jevcomp with OpenRouter` (or `with TypeSafe`) and type your key where the terminal asks for it. Finally type `/hooks` and approve the four jevcomp hooks.
-
-**npm.** Also gives you the `jevcomp` command:
-
 ```bash
 npm install -g --install-links github:jevcomp/jevcomp
 jevcomp install openrouter codex
 ```
 
-Use `typesafe` if your key is from TypeSafe. Restart Codex, type `/hooks` and approve the four hooks.
+Use `typesafe` if your key is from TypeSafe. Then start Codex with `jevcomp codex` instead of `codex` (see below); on the first start, type `/hooks` and approve the four jevcomp hooks.
 
 ### Check
 
-Ask Codex `Check jevcomp` (npm: `jevcomp doctor`). It is working when Codex shows `jevcomp dashboard: http://127.0.0.1:43127/` as a session starts.
+Run `jevcomp doctor`. It is working when Codex shows `jevcomp dashboard: http://127.0.0.1:43127/` as a session starts.
 
 ### Uninstall
 
 | Installed with | Run | What it removes |
 | --- | --- | --- |
-| Plugin | Ask Codex `Uninstall jevcomp` | The plugin and its marketplace; stops the dashboard unless Claude Code still uses it |
-| Plugin, from a terminal | `codex plugin remove jevcomp@jevcomp` then `codex plugin marketplace remove jevcomp` | The plugin and its marketplace; the dashboard stops when you restart the computer |
+| Plugin (before 0.7.3) | Ask Codex `Uninstall jevcomp` | The plugin and its marketplace; stops the dashboard unless Claude Code still uses it |
+| Plugin (before 0.7.3), from a terminal | `codex plugin remove jevcomp@jevcomp` then `codex plugin marketplace remove jevcomp` | The plugin and its marketplace; the dashboard stops when you restart the computer |
 | npm | `jevcomp uninstall codex` | The four hooks; stops the dashboard unless Claude Code still uses it |
 
 ## Real savings in Codex: `jevcomp codex`
 
 With the npm command installed, start Codex from a terminal with `jevcomp codex [args]`. This runs Codex through jevcomp's local proxy. When Jev returns a usable summary that meets the minimum reduction setting, the proxy answers Codex's compaction request locally instead of sending that request to OpenAI. If Jev errors or its result is unusable or below the minimum reduction, the original request is forwarded to Codex's real server.
 
-Only sessions started with `jevcomp codex` use this path. Starting Codex normally continues to use the hook flow described above. In the dashboard, check the recent runs for a Codex entry; a compaction answered locally by Jev shows as completed. The dashboard records the run but does not estimate OpenAI billing-token savings.
+Only sessions started with `jevcomp codex` save tokens. Starting Codex with plain `codex` still runs the jevcomp hooks, which save nothing. In the dashboard, check the recent runs for a Codex entry; a compaction answered locally by Jev shows as completed. The dashboard records the run but does not estimate OpenAI billing-token savings.
 
 ## Antigravity (experimental)
 
@@ -78,7 +65,7 @@ claude plugin marketplace add jevcomp/jevcomp
 claude plugin install jevcomp@jevcomp
 ```
 
-**npm.** Also gives you the `jevcomp` command:
+**npm (recommended).** Also gives you the `jevcomp` command, needed for `jevcomp codex`, the only way that saves tokens:
 
 ```bash
 npm install -g --install-links github:jevcomp/jevcomp
