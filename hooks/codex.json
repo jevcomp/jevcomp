@@ -1,9 +1,0 @@
-{
-  "description": "Jev-guided retained tool evidence around Codex compaction.",
-  "hooks": {
-    "PreCompact": [{ "matcher": "manual|auto", "hooks": [{ "type": "command", "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.PLUGIN_ROOT,'dist','cli.js')))\" jevcomp hook --jevcomp", "timeout": 120, "statusMessage": "Selecting retained context with Jev" }] }],
-    "PostCompact": [{ "matcher": "manual|auto", "hooks": [{ "type": "command", "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.PLUGIN_ROOT,'dist','cli.js')))\" jevcomp hook --jevcomp", "timeout": 10 }] }],
-    "SessionStart": [{ "matcher": "startup|resume|clear|compact", "hooks": [{ "type": "command", "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.PLUGIN_ROOT,'dist','cli.js')))\" jevcomp hook --jevcomp", "timeout": 10, "additionalContextLimit": 0, "statusMessage": "Loading jevcomp" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.PLUGIN_ROOT,'dist','cli.js')))\" jevcomp hook --jevcomp", "timeout": 10, "additionalContextLimit": 0 }] }]
-  }
-}

@@ -86,10 +86,8 @@ test('hook runs are remembered as proof the hooks are active', async () => {
   assert.deepEqual(Object.keys(activity), ['UserPromptSubmit']);
 });
 
-test('the version shown matches the package and plugin manifests', async () => {
+test('the version shown matches the package manifest', async () => {
   const root = new URL('..', import.meta.url);
   const pkg = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
-  const plugin = JSON.parse(await readFile(new URL('.codex-plugin/plugin.json', root), 'utf8'));
   assert.equal(VERSION, pkg.version);
-  assert.equal(VERSION, plugin.version);
 });

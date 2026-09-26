@@ -15,7 +15,6 @@
   "files": [
     "dist",
     "hooks",
-    ".codex-plugin",
     ".claude-plugin",
     "skills",
     "AUDIT.md",

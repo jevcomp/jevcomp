@@ -1,25 +1,25 @@
 ---
 name: jevcomp
-description: Configure jevcomp with OpenRouter or TypeSafe, check plugin readiness, give the dashboard address, uninstall it, and explain compaction decisions and metrics.
+description: Configure jevcomp with OpenRouter or TypeSafe, check readiness, give the dashboard address, uninstall it, and explain compaction decisions and metrics.
 ---
 
 # jevcomp
 
 Use this skill when the user asks to set up an API key, check readiness, find the dashboard, uninstall jevcomp, or inspect compaction decisions and metrics.
 
-## Plugin setup
+## Setup
 
-Find the installed `jevcomp` entry with `codex plugin list --json` and use its `installedPath` to run `dist/cli.js`. Do not assume a global `jevcomp` command exists.
+jevcomp is installed with npm and gives a global `jevcomp` command. In Codex, token savings come only from starting Codex with `jevcomp codex`; plain `codex` does not save tokens.
 
-Run `node "<installedPath>/dist/cli.js" doctor --json` first. If `apiKeyConfigured` is true, keep the current provider and key. Check `/hooks` in Codex and confirm PreCompact, PostCompact, SessionStart, and UserPromptSubmit are active.
+Run `jevcomp doctor --json` first. If `apiKeyConfigured` is true, keep the current provider and key.
 
-When the user asks to check jevcomp, answer in plain words: whether the key is set and for which provider, and the dashboard address. Use `dashboardUrl` from `doctor --json`; when it is empty, give `http://127.0.0.1:43127/` and say it starts with the next Codex session. You cannot see `/hooks`, so ask the user to type `/hooks` and confirm the four jevcomp hooks are active. Tell them the installation is complete when Codex shows the `jevcomp dashboard:` message as a session starts, because only the jevcomp hooks print it.
+When the user asks to check jevcomp, answer in plain words: whether the key is set and for which provider, and the dashboard address. Use `dashboardUrl` from `doctor --json`; when it is empty, give `http://127.0.0.1:43127/` and say `jevcomp codex` starts it.
 
-When the user asks where the dashboard is, run `doctor --json` and give `dashboardUrl`. When it is empty, run `dashboard` from the installed CLI path to start it, then give the address it prints.
+When the user asks where the dashboard is, run `jevcomp doctor --json` and give `dashboardUrl`. When it is empty, run `jevcomp dashboard`, then give the address it prints.
 
-When the user asks to uninstall jevcomp, run `uninstall codex` from the installed CLI path and show its output: it removes the plugin and its marketplace, stops the dashboard unless Claude Code still uses jevcomp, and lists the folders it kept. Run plain `uninstall` only when the user asks to remove jevcomp from Claude Code too.
+When the user asks to uninstall jevcomp, run `jevcomp uninstall codex` and show its output: it removes jevcomp from Codex (including a plugin left by versions before 0.7.3), stops the dashboard unless another agent still uses it, and lists the folders it kept. Run plain `jevcomp uninstall` only when the user asks to remove jevcomp everywhere.
 
-If the key is missing or the user wants to change it, use `install openrouter` or `install typesafe` from that installed CLI path (plain `install` asks). Ask which provider only when the user has not specified one. `install` also removes older standalone jevcomp hooks. Give the exact local command and have the user enter the key in the terminal's masked prompt; never ask for the key in chat. Plugin setup keeps hook management inside Codex. Recheck `doctor --json` and `/hooks` afterward. In plugin mode, `hooksInstalled` describes only standalone user hooks; `pluginRoot` identifies the plugin package.
+If the key is missing or the user wants to change it, use `jevcomp install openrouter` or `jevcomp install typesafe` (plain `install` asks). Ask which provider only when the user has not specified one. Give the exact local command and have the user enter the key in the terminal's masked prompt; never ask for the key in chat.
 
 ## Claude Code
 
@@ -27,7 +27,7 @@ In Claude Code the plugin folder is `~/.claude/plugins/cache/jevcomp/jevcomp/<ve
 
 ## Lifecycle
 
-- `SessionStart(startup/resume/clear)`: check for a usable API key and migrate older jevcomp hooks before the plugin runs.
+- `SessionStart(startup/resume/clear)`: check for a usable API key and migrate older jevcomp hooks before jevcomp runs.
 - `PreCompact`: read the Codex rollout, reconstruct model-visible conversation content, score completed tool calls/results with Jev, and write retained sidecars.
 - Codex runs its native compaction unchanged.
 - `PostCompact`: mark the prepared sidecar ready only after compaction succeeds.
@@ -37,15 +37,15 @@ Do not claim that hook mode rewrites the native Codex compaction request. It pre
 
 ## Useful commands
 
-- `node "<installedPath>/dist/cli.js" install openrouter` (OpenRouter)
-- `node "<installedPath>/dist/cli.js" install typesafe` (TypeSafe)
-- `node "<installedPath>/dist/cli.js" doctor`
-- `node "<installedPath>/dist/cli.js" uninstall codex` (keeps the key, settings and history; plain `uninstall` also removes it from Claude Code)
-- `node "<installedPath>/dist/cli.js" settings`
-- `node "<installedPath>/dist/cli.js" settings restore-mode balanced`
-- `node "<installedPath>/dist/cli.js" dashboard` (restarts it; the plugin already starts it at `http://127.0.0.1:43127/` with each Codex session)
-- `node "<installedPath>/dist/cli.js" compact <rollout.jsonl> --context retained.txt --json retained.json`
-- `jevcomp codex [args]` (npm command: run Codex through Jev's local compaction proxy; dashboard entries show Codex runs answered locally)
+- `jevcomp install openrouter` (OpenRouter)
+- `jevcomp install typesafe` (TypeSafe)
+- `jevcomp doctor`
+- `jevcomp uninstall codex` (keeps the key, settings and history; plain `uninstall` also removes it from Claude Code)
+- `jevcomp settings`
+- `jevcomp settings restore-mode balanced`
+- `jevcomp dashboard` (restarts it at `http://127.0.0.1:43127/`)
+- `jevcomp compact <rollout.jsonl> --context retained.txt --json retained.json`
+- `jevcomp codex [args]` (run Codex through Jev's local compaction proxy, the only way it saves tokens in Codex)
 - `jevcomp install agy` (experimental Antigravity certificate setup; requires OpenSSL and asks once on Windows)
 - `jevcomp uninstall agy` (removes the Antigravity certificate)
 - `jevcomp agy [args]` (experimental pass-through proxy; captures generation requests only with `JEVCOMP_CAPTURE=1`, with no token savings yet)
