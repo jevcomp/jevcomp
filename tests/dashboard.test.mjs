@@ -64,7 +64,7 @@ test('dashboard reports measured impact without invented token-savings estimates
   const api = await fetch(`${dashboard.url}api/stats`).then((r) => r.json());
   assert.equal(api.transcriptCharsRemoved, 12000);
   assert.equal(api.completedCharsRemoved, 6000);
-  assert.equal(api.settings.restoreMode, 'preserve');
+  assert.equal(api.settings.restoreMode, 'minimal');
 
   // Dashboard caches parsed history while the file is unchanged, but an append must invalidate it.
   await appendHistory({ at: '2026-09-22T12:03:00.000Z', runId: 'fail-2', sessionId: 's4', phase: 'precompact', status: 'failed', detail: 'transcript unavailable' }, env);
@@ -83,7 +83,7 @@ test('dashboard cache invalidates when persisted settings change without new his
   const { server, url } = await startDashboard(0, env);
   try {
     const before = await fetch(`${url}api/stats`).then((response) => response.json());
-    assert.equal(before.settings.restoreMode, 'preserve');
+    assert.equal(before.settings.restoreMode, 'minimal');
     await setUserSetting('restore-mode', 'minimal', env);
     const after = await fetch(`${url}api/stats`).then((response) => response.json());
     assert.equal(after.settings.restoreMode, 'minimal');

@@ -30,9 +30,9 @@ test('arrow keys change and save settings without typing names', async () => {
   const run = runSettingsMenu(terminal, env);
   await press(terminal, run, ['\x1b[C', '\x1b[B', '\x1b[C', '\x1b']);
   const settings = userSettings(env);
-  assert.equal(settings.restoreMode, 'balanced');
+  assert.equal(settings.restoreMode, 'preserve');
   assert.equal(settings.restoreMaxChars, 100_000);
-  assert.match(terminal.screen(), /Part of the text/);
+  assert.match(terminal.screen(), /All the text/);
   assert.match(terminal.screen(), /The most text jevcomp sends to Codex/);
 });
 
@@ -41,7 +41,7 @@ test('a setting decided by an environment variable is explained, not changed', a
   const terminal = fakeTerminal();
   const run = runSettingsMenu(terminal, env);
   await press(terminal, run, ['\x1b[C', 'q']);
-  assert.equal(userSettings({ JEVCOMP_CONFIG_DIR: env.JEVCOMP_CONFIG_DIR }).restoreMode, 'preserve');
+  assert.equal(userSettings({ JEVCOMP_CONFIG_DIR: env.JEVCOMP_CONFIG_DIR }).restoreMode, 'minimal');
   assert.match(terminal.screen(), /JEVCOMP_RESTORE_MODE is set in your environment/);
 });
 
@@ -50,6 +50,6 @@ test('the last row resets everything to defaults', async () => {
   const terminal = fakeTerminal();
   const run = runSettingsMenu(terminal, env);
   await press(terminal, run, ['\x1b[C', '\x1b[A', '\r', '\x03']);
-  assert.equal(userSettings(env).restoreMode, 'preserve');
+  assert.equal(userSettings(env).restoreMode, 'minimal');
   assert.match(terminal.screen(), /back to their defaults/);
 });

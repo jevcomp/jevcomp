@@ -7,7 +7,7 @@
       "name": "jevcomp",
       "source": "./",
       "description": "Jev decides what Claude Code keeps when it compacts, instead of a model-written summary.",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "license": "MIT"
     }
   ]

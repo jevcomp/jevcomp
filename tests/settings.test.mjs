@@ -34,7 +34,7 @@ test('environment variables override saved user settings and reset restores defa
   assert.equal(overridden.lossThreshold, 0.7);
   await resetUserSettings(base);
   const defaults = userSettings(base);
-  assert.equal(defaults.restoreMode, 'preserve');
+  assert.equal(defaults.restoreMode, 'minimal');
   assert.equal(defaults.lossThreshold, 0.5);
 });
 
@@ -58,7 +58,7 @@ test('manually corrupted settings file is sanitized back to safe defaults', asyn
     minReductionRatio: null,
   }));
   const value = userSettings(env);
-  assert.equal(value.restoreMode, 'preserve');
+  assert.equal(value.restoreMode, 'minimal');
   assert.equal(value.restoreMaxChars, 60000);
   assert.equal(value.pinRecentMessages, 6);
   assert.equal(value.lossThreshold, 0.5);

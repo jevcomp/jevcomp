@@ -13,7 +13,7 @@ export interface SettingsSnapshot {
         detail?: string;
     } | null;
     version: string;
-    lastAgent: 'codex' | 'claude' | null;
+    lastAgent: 'codex' | 'claude' | 'agy' | null;
     agents: {
         codex: {
             kind: 'plugin' | 'command';
@@ -27,6 +27,9 @@ export interface SettingsSnapshot {
             functionHooks: boolean;
             lastRun: string | null;
         } | null;
+        agy: {
+            installed: boolean;
+        };
     };
     dashboardUrl: string;
     settings: Array<{

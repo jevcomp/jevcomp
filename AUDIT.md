@@ -59,7 +59,7 @@ Current Codex command hooks give `PreCompact` control over continue/stop, not a 
 | Stale sidecar cleanup | no | 48h | 48h | restored in 0.2 |
 | Stale pending state invalidation on new PreCompact | no | no | yes | prevents an older prepared sidecar being readied by a later compaction |
 | Result head/tail before large reinjection | no | yes | yes | restored in 0.2 |
-| Full restore mode | effectively yes | yes, capped | yes, **default** | base behavior preserved |
+| Full restore mode | effectively yes | yes, capped | yes, optional (default until 0.7.2) | `minimal` is the default since 0.7.3 |
 | Index restore mode | no | no | yes, optional | token-first option |
 | Per-tool decision/removal history | yes | limited | yes | restored in 0.2 |
 | Dashboard | rich, auto-start | no | rich, auto-start | started at Codex session start, never from a compaction hook |
@@ -277,3 +277,7 @@ Claude Code already recovers what jevcomp restores in Codex, so porting the Code
 - A Codex | Claude Code switch at the top filters the whole dashboard by agent (`/api/stats?agent=`); it appears only when both are installed and defaults to the agent of the latest history row.
 - The Claude Code view talks about cutting, not sending, and hides `restore-mode` and `restore-max-chars`, which only the Codex restore flow uses.
 - Claude Code installation is read from `~/.claude/plugins/installed_plugins.json` and the function-hook flag in `~/.claude/settings.json`.
+
+## 0.7.3 Codex restore default is `minimal` — 2026-09-26
+
+Codex compaction costs the same with or without jevcomp: its hooks cannot replace the summary, so whatever jevcomp adds back is extra context on every later request. The default restore mode is now `minimal` (the list of what Jev kept and where it is on disk), so Codex pays little context and can open the full text only when it needs it. Saved settings are unchanged; `preserve` and `balanced` remain available.

@@ -350,7 +350,7 @@ table.rb th,table.rb td{white-space:nowrap}table.rb .rb-grow{width:100%}
 @media (max-width:760px){.shell{padding-inline:16px}.group{padding-inline:16px}.flow-steps{grid-template-columns:1fr}.flow-arrow>span:first-child{transform:rotate(90deg)}}
 </style></head><body>
 <div class="shell">
- <header class="topbar"><div class="brand"><b>jevcomp</b><span>compactação</span></div><div class="top-right"><div class="seg" id="agent-switch" role="group" aria-label="Agente" hidden><button type="button" data-agent="codex" aria-pressed="false">Codex</button><button type="button" data-agent="claude" aria-pressed="false">Claude Code</button></div><span class="small muted" id="live">dados locais</span></div></header>
+ <header class="topbar"><div class="brand"><b>jevcomp</b><span>compactação</span></div><div class="top-right"><div class="seg" id="agent-switch" role="group" aria-label="Agente" hidden><button type="button" data-agent="codex" aria-pressed="false">Codex</button><button type="button" data-agent="claude" aria-pressed="false">Claude Code</button><button type="button" data-agent="agy" aria-pressed="false">Antigravity</button></div><span class="small muted" id="live">dados locais</span></div></header>
  <nav class="nav" role="tablist" aria-label="Seções"><button role="tab" id="nav-geral" aria-controls="view-geral" aria-selected="true">Resumo</button><button role="tab" id="nav-config" aria-controls="view-config" aria-selected="false">Configurações</button></nav>
  <main class="content">
   <div id="error"></div>
@@ -402,7 +402,7 @@ function toast(text,bad){const el=$('#toast');el.textContent=text;el.className='
 
 const DECISION={k:['ok','Inteiro'],s:['short','Resumido'],r:['drop','Removido'],p:['pin','Recente']};
 const STATUS={restored:['ok','Enviado ao Codex','O Codex recebeu o que o resumo perdeu.'],nothing_missing:['skip','Não enviado: resumo já completo','O resumo do Codex já tinha tudo o que o Jev guardou; não havia o que enviar.'],skipped:['skip','Não enviado: pouco a cortar','Quase tudo ainda era útil: o corte ficaria abaixo do mínimo escolhido em Configurações.'],too_short:['skip','Não enviado: pouco a cortar','A conversa tinha menos de duas mensagens; não havia o que cortar.'],failed:['fail','Não enviado: erro','O jevcomp teve um erro antes da compactação e o Codex fez o resumo normal.'],restore_failed:['fail','Falha ao enviar','O jevcomp não conseguiu ler o que tinha guardado.'],ready:['wait','Aguardando envio','Vai junto do próximo prompt ou do início da próxima sessão.'],prepared:['wait','Aguardando a compactação','O Jev já escolheu; o Codex ainda está resumindo.']};
-const HOST={codex:'Codex',claude:'Claude Code'};
+const HOST={codex:'Codex',claude:'Claude Code',agy:'Antigravity'};
 const agentList=s=>[...new Set((s.runs||[]).map(r=>'o '+(HOST[r.host]||'Codex')))];
 const agents=s=>agentList(s).join(' e ')||'o Codex';
 const agentVerb=(s,one,many)=>agentList(s).length>1?many:one;
@@ -542,9 +542,9 @@ const SETTING_TEXT={
  'loss-threshold':{title:'Quanto cortar',help:'O Jev estima o risco de cortar algo que AGENT ainda vai usar. Pouco: só corta o que tem risco baixo. Muito: corta mais.',label:v=>({0.3:'Pouco',0.5:'Normal',0.7:'Muito'})[Number(v)]||String(v)},
  'min-reduction-ratio':{title:'Só agir se cortar pelo menos',help:'Se o corte diminuir o texto menos que isso, o jevcomp não faz nada naquela compactação.',label:v=>Math.round(Number(v)*100)+'%',numbers:true}
 };
-const AGENT_NAME={codex:'o Codex',claude:'o Claude Code'};
-const installedAgents=s=>Object.keys(AGENT_NAME).filter(id=>s.agents[id]);
-const AGENT_TITLE={codex:'Codex',claude:'Claude Code'};
+const AGENT_NAME={codex:'o Codex',claude:'o Claude Code',agy:'o Antigravity'};
+const installedAgents=s=>Object.keys(AGENT_NAME).filter(id=>id==='agy'?s.agents.agy?.installed:s.agents[id]);
+const AGENT_TITLE={codex:'Codex',claude:'Claude Code',agy:'Antigravity'};
 const PROVIDER_NAME={openrouter:'OpenRouter',typesafe:'TypeSafe'};
 let settingsState=null,pendingProvider=null,changingKey=false;
 const info=(label,value)=>'<div class="info"><span>'+label+'</span><b>'+value+'</b></div>';
@@ -578,9 +578,11 @@ function renderSettings(s){
   +'<div class="info"><span>Compactação pelo jevcomp</span><span class="pill '+(claude.functionHooks?'ok':'fail')+'">'+(claude.functionHooks?'Ligada':'Desligada')+'</span></div>'
   +(claude.functionHooks?'':'<p class="conn-note warn">Abra uma sessão nova do Claude Code: o jevcomp liga a compactação sozinho e pede para reiniciar uma vez.</p>')
   +info('Última compactação',claude.lastRun?esc(ago(claude.lastRun)):'Ainda nenhuma'));
- if(!codex&&!claude)cards+=card(AGENT_TITLE[agent],'Como o jevcomp está ligado ao '+AGENT_TITLE[agent],'<p class="conn-note warn">O jevcomp não está instalado no '+AGENT_TITLE[agent]+'.</p>');
+ const agy=agent==='agy'&&s.agents.agy?.installed;
+ if(agy)cards+=card('Antigravity','Como o jevcomp está ligado ao Antigravity',info('Instalação','CA local instalada')+info('Uso','jevcomp agy'));
+ if(!codex&&!claude&&!agy)cards+=card(AGENT_TITLE[agent],'Como o jevcomp está ligado ao '+AGENT_TITLE[agent],'<p class="conn-note warn">O jevcomp não está instalado no '+AGENT_TITLE[agent]+'.</p>');
  $('#agents-info').innerHTML=cards+card('Dashboard','Este painel','<div class="info"><span>Endereço</span><b class="num">'+esc(s.dashboardUrl)+'</b></div>');
- $('#behavior-sub').textContent=installedAgents(s).length>1?'Vale para o Codex e o Claude Code · salvo na hora':'Cada mudança é salva na hora';
+ $('#behavior-sub').textContent=installedAgents(s).length>1?'Vale para '+installedAgents(s).map(id=>AGENT_TITLE[id]).join(' e ')+' · salvo na hora':'Cada mudança é salva na hora';
  $('#behavior').innerHTML=s.settings.filter(item=>agent==='codex'||!SETTING_TEXT[item.name].codexOnly).map(item=>{
   const text=SETTING_TEXT[item.name];
   const choices=item.choices.some(c=>same(c,item.value))?item.choices:item.choices.concat([item.value]);
@@ -705,7 +707,7 @@ export async function startDashboard(port = 43127, env = process.env) {
                 });
             if (url.pathname === '/api/stats') {
                 const agent = url.searchParams.get('agent');
-                return json(res, await currentStats(agent === 'codex' || agent === 'claude' ? agent : undefined));
+                return json(res, await currentStats(agent === 'codex' || agent === 'claude' || agent === 'agy' ? agent : undefined));
             }
             if (url.pathname === '/api/history')
                 return json(res, (await readHistory(env)).slice(-200).reverse());

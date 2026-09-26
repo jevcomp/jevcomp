@@ -53,6 +53,18 @@ Ask Codex `Check jevcomp` (npm: `jevcomp doctor`). It is working when Codex show
 | Plugin, from a terminal | `codex plugin remove jevcomp@jevcomp` then `codex plugin marketplace remove jevcomp` | The plugin and its marketplace; the dashboard stops when you restart the computer |
 | npm | `jevcomp uninstall codex` | The four hooks; stops the dashboard unless Claude Code still uses it |
 
+## Real savings in Codex: `jevcomp codex`
+
+With the npm command installed, start Codex from a terminal with `jevcomp codex [args]`. This runs Codex through jevcomp's local proxy. When Jev returns a usable summary that meets the minimum reduction setting, the proxy answers Codex's compaction request locally instead of sending that request to OpenAI. If Jev errors or its result is unusable or below the minimum reduction, the original request is forwarded to Codex's real server.
+
+Only sessions started with `jevcomp codex` use this path. Starting Codex normally continues to use the hook flow described above. In the dashboard, check the recent runs for a Codex entry; a compaction answered locally by Jev shows as completed. The dashboard records the run but does not estimate OpenAI billing-token savings.
+
+## Antigravity (experimental)
+
+`jevcomp agy [args]` currently sends Antigravity traffic through a local intermediary and forwards it. Set `JEVCOMP_CAPTURE=1` to save captured generation requests. It does not compact requests or provide token savings yet.
+
+Install its local certificate with `jevcomp install agy`. OpenSSL is required; on Windows, approve the certificate warning once by clicking **Yes**. Install OpenSSL with `winget install ShiningLight.OpenSSL.Light` if needed. Remove the certificate with `jevcomp uninstall agy`.
+
 ## Claude Code
 
 ### Install
@@ -120,7 +132,7 @@ Run `jevcomp settings`, use the **Configurações** page of the dashboard, or as
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `restore-mode` | `preserve` | Codex only. How much is added back: `preserve` (all selected text), `balanced` (a list plus an excerpt), `minimal` (only the list). |
+| `restore-mode` | `minimal` | Codex only. How much is added back: `minimal` (only the list of what Jev kept and where it is saved), `balanced` (the list plus an excerpt), `preserve` (all selected text). |
 | `restore-max-chars` | `60000` | Codex only. Most characters added back after a compaction; `0` removes the limit. |
 | `pin-recent-messages` | `6` | Newest messages Jev never touches. |
 | `loss-threshold` | `0.5` | Jev removes or shortens an output only when its risk of losing something still needed is below this. Higher cuts more. |

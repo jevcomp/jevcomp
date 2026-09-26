@@ -5,9 +5,11 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compactForClaude } from './claude-compact.js';
+import { runCodex } from './codex-proxy.js';
+import { installAgyCa, runAgy, uninstallAgyCa } from './agy-proxy.js';
 import { compactMessages, reductionRatio } from './compact.js';
 import { startDashboard } from './dashboard.js';
-import { dashboardInstancePath, dashboardPort, restartDashboard, runningDashboard, stopDashboard } from './dashboard-service.js';
+import { dashboardInstancePath, dashboardPort, ensureDashboard, restartDashboard, runningDashboard, stopDashboard } from './dashboard-service.js';
 import { enableFunctionHooks, handleHook } from './hooks.js';
 import { resetUserSettings, setUserSetting, userSettings } from './settings.js';
 import { describeSettings, runSettingsMenu, SETTINGS_ITEMS } from './settings-menu.js';
@@ -25,17 +27,22 @@ function fmt(n) { return Number(n || 0).toLocaleString(); }
 function chars(n) { return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M chars` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k chars` : `${fmt(n)} chars`; }
 function help() {
     const pluginRoot = enabledPluginRoot();
-    const command = pluginRoot ? `node "${join(pluginRoot, 'dist', 'cli.js')}"` : 'jevcomp';
+    const runningRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+    const command = pluginRoot?.toLowerCase() === runningRoot.toLowerCase()
+        ? `node "${join(pluginRoot, 'dist', 'cli.js')}"`
+        : 'jevcomp';
     console.log(`jevcomp
 
-  ${command} install      Connect jevcomp to Codex, Claude Code or both: choose OpenRouter or TypeSafe
+  ${command} install      Connect jevcomp to Codex, Claude Code or Antigravity
   ${' '.repeat(command.length)}              and enter your key (run it again to change them)
-  ${' '.repeat(command.length)}              Skip the questions: install [openrouter|typesafe] [codex|claude|all]
+  ${' '.repeat(command.length)}              Skip the questions: install [openrouter|typesafe] [codex|claude|agy|all]
   ${command} settings     Change how jevcomp behaves
   ${command} doctor       Check that everything works
   ${command} dashboard    Restart the dashboard
-  ${command} uninstall    Remove jevcomp from Codex and Claude Code (your key and history are kept)
-  ${' '.repeat(command.length)}              Only one of them: uninstall codex, uninstall claude
+  ${command} uninstall    Remove jevcomp from Codex, Claude Code or Antigravity
+  ${' '.repeat(command.length)}              Only one of them: uninstall codex, uninstall claude, uninstall agy
+  ${command} codex [args]  Run Codex through the local proxy; compaction is answered by Jev
+  ${command} agy [args]   Run Antigravity through the local proxy
 
 Dashboard: ${dashboardAddress()} (opens with each Codex or Claude Code session)`);
 }
@@ -210,6 +217,11 @@ async function saveKey(provider) {
     throw new Error(`${label} API key is required`);
 }
 async function install(args) {
+    if (args.includes('agy'))
+        await installAgyCa();
+    if (args.length === 1 && args[0] === 'agy')
+        return;
+    args = args.filter((arg) => arg !== 'agy');
     const agents = await chooseAgents(args);
     const provider = await chooseProvider(args.find((arg) => !['codex', 'claude', 'all', 'both'].includes(arg)));
     await saveKey(provider);
@@ -234,6 +246,11 @@ function pluginId(pluginRoot) {
     return `jevcomp@${basename(dirname(dirname(pluginRoot)))}`;
 }
 async function uninstall(args) {
+    if (args.includes('agy'))
+        await uninstallAgyCa();
+    if (args.length === 1 && args[0] === 'agy')
+        return;
+    args = args.filter((arg) => arg !== 'agy');
     const agents = agentArgs(args) ?? ['codex', 'claude'];
     const pluginRoot = enabledPluginRoot();
     const claudeInstalled = claudePluginInstalled();
@@ -305,6 +322,14 @@ async function main() {
     }
     if (cmd === 'uninstall') {
         await uninstall(args);
+        return;
+    }
+    if (cmd === 'codex') {
+        process.exitCode = await runCodex(args, process.env, { startDashboard: () => ensureDashboard(dashboardPort(process.env), process.env) });
+        return;
+    }
+    if (cmd === 'agy') {
+        process.exitCode = await runAgy(args);
         return;
     }
     if (cmd === 'doctor') {

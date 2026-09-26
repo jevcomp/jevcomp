@@ -9,6 +9,7 @@ import { SETTINGS_ITEMS } from './settings-menu.js';
 import { resetUserSettings, setUserSetting, settingOverride, userSettings, type SettingName } from './settings.js';
 import { readHistory, readHookActivity, type HookActivity } from './store.js';
 import { VERSION } from './version.js';
+import { agyCaInstalled, agyCertificateThumbprint } from './agy-proxy.js';
 
 type Env = Record<string, string | undefined>;
 type Provider = 'openrouter' | 'typesafe';
@@ -19,13 +20,25 @@ export interface SettingsSnapshot {
   keys: Record<Provider, KeyStatus>;
   lastJev: { at: string; ok: boolean; detail?: string } | null;
   version: string;
-  lastAgent: 'codex' | 'claude' | null;
+  lastAgent: 'codex' | 'claude' | 'agy' | null;
   agents: {
     codex: { kind: 'plugin' | 'command'; hooks: { installed: number; total: number; activity: HookActivity } } | null;
     claude: { functionHooks: boolean; lastRun: string | null } | null;
+    agy: { installed: boolean };
   };
   dashboardUrl: string;
   settings: Array<{ name: SettingName; value: string; choices: string[]; lockedBy?: string }>;
+}
+
+const agyDetection = new Map<string, { at: number; installed: boolean }>();
+async function antigravityInstalled(env: Env): Promise<boolean> {
+  const key = env.JEVCOMP_AGY_HOME ?? join(homedir(), '.jevcomp', 'agy-ca');
+  const cached = agyDetection.get(key);
+  if (cached && Date.now() - cached.at < 60_000) return cached.installed;
+  const thumbprint = await agyCertificateThumbprint(env);
+  const installed = thumbprint ? agyCaInstalled(thumbprint) : false;
+  agyDetection.set(key, { at: Date.now(), installed });
+  return installed;
 }
 
 async function pluginHookCount(pluginRoot: string): Promise<number> {
@@ -57,6 +70,7 @@ export async function settingsSnapshot(env: Env = process.env): Promise<Settings
   const history = await readHistory(env);
   const codexHooks = pluginRoot ? await pluginHookCount(pluginRoot) : (await inspectHooks(env)).events.length;
   const claude = await claudeInstallation(env);
+  const agyInstalled = await antigravityInstalled(env);
   const lastJev = [...history].reverse().find((row) => row.phase === 'precompact' || (!row.phase && row.status === 'failed'));
   const settingValue: Record<SettingName, string> = {
     'restore-mode': settings.restoreMode,
@@ -75,6 +89,7 @@ export async function settingsSnapshot(env: Env = process.env): Promise<Settings
     agents: {
       codex: codexHooks ? { kind: pluginRoot ? 'plugin' : 'command', hooks: { installed: codexHooks, total: 4, activity: await readHookActivity(env) } } : null,
       claude: claude ? { ...claude, lastRun: [...history].reverse().find((row) => row.host === 'claude')?.at ?? null } : null,
+      agy: { installed: agyInstalled },
     },
     dashboardUrl: `http://127.0.0.1:${dashboardPort(env)}/`,
     settings: SETTINGS_ITEMS.map((item) => ({

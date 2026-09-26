@@ -8,6 +8,13 @@ function safe(value) { return value.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 18
 export function dataDir(env = process.env) {
     return env.JEVCOMP_DATA_DIR ?? join(homedir(), '.jevcomp');
 }
+/** JEVCOMP_CAPTURE=1 saves under ~/.jevcomp; any other value is taken as the folder itself. */
+export function captureDirectory(env, folder) {
+    const value = env.JEVCOMP_CAPTURE?.trim();
+    if (!value || value === '0')
+        return undefined;
+    return value === '1' ? join(dataDir(env), folder) : value;
+}
 export function statePath(sessionId, env = process.env) { return join(dataDir(env), 'sessions', `${safe(sessionId)}.json`); }
 export function contextPath(sessionId, env = process.env) { return join(dataDir(env), 'sessions', `${safe(sessionId)}.context.txt`); }
 export function messagesPath(sessionId, env = process.env) { return join(dataDir(env), 'sessions', `${safe(sessionId)}.messages.json`); }

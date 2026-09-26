@@ -22,6 +22,9 @@ declare module 'node:fs' { export const cpSync: any; export const existsSync: an
 declare module 'node:path' { export const join: any; export const dirname: any; export const resolve: any; export const basename: any; export const isAbsolute: any; export const relative: any; export const sep: string; }
 declare module 'node:os' { export const homedir: any; export const tmpdir: any; }
 declare module 'node:http' { export const createServer: any; }
+declare module 'node:net' { export const connect: any; export const createServer: any; }
+declare module 'node:tls' { export const createServer: any; }
+declare module 'node:https' { export const request: any; }
 declare module 'node:url' { export const fileURLToPath: any; }
 declare module 'node:crypto' { export const createHash: any; export const randomUUID: any; }
 declare module 'node:child_process' { export const execFileSync: any; export const spawn: any; }

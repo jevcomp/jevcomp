@@ -9,6 +9,18 @@ import { SETTINGS_ITEMS } from './settings-menu.js';
 import { resetUserSettings, setUserSetting, settingOverride, userSettings } from './settings.js';
 import { readHistory, readHookActivity } from './store.js';
 import { VERSION } from './version.js';
+import { agyCaInstalled, agyCertificateThumbprint } from './agy-proxy.js';
+const agyDetection = new Map();
+async function antigravityInstalled(env) {
+    const key = env.JEVCOMP_AGY_HOME ?? join(homedir(), '.jevcomp', 'agy-ca');
+    const cached = agyDetection.get(key);
+    if (cached && Date.now() - cached.at < 60_000)
+        return cached.installed;
+    const thumbprint = await agyCertificateThumbprint(env);
+    const installed = thumbprint ? agyCaInstalled(thumbprint) : false;
+    agyDetection.set(key, { at: Date.now(), installed });
+    return installed;
+}
 async function pluginHookCount(pluginRoot) {
     // Versions before Claude Code support kept the Codex hooks in hooks.json.
     for (const file of ['codex.json', 'hooks.json']) {
@@ -41,6 +53,7 @@ export async function settingsSnapshot(env = process.env) {
     const history = await readHistory(env);
     const codexHooks = pluginRoot ? await pluginHookCount(pluginRoot) : (await inspectHooks(env)).events.length;
     const claude = await claudeInstallation(env);
+    const agyInstalled = await antigravityInstalled(env);
     const lastJev = [...history].reverse().find((row) => row.phase === 'precompact' || (!row.phase && row.status === 'failed'));
     const settingValue = {
         'restore-mode': settings.restoreMode,
@@ -59,6 +72,7 @@ export async function settingsSnapshot(env = process.env) {
         agents: {
             codex: codexHooks ? { kind: pluginRoot ? 'plugin' : 'command', hooks: { installed: codexHooks, total: 4, activity: await readHookActivity(env) } } : null,
             claude: claude ? { ...claude, lastRun: [...history].reverse().find((row) => row.host === 'claude')?.at ?? null } : null,
+            agy: { installed: agyInstalled },
         },
         dashboardUrl: `http://127.0.0.1:${dashboardPort(env)}/`,
         settings: SETTINGS_ITEMS.map((item) => ({

@@ -15,7 +15,7 @@ interface RunSummary {
     trigger?: string;
     model?: string;
     provider?: string;
-    host: 'codex' | 'claude';
+    host: 'codex' | 'claude' | 'agy';
     status: 'prepared' | 'ready' | 'restored' | 'nothing_missing' | 'skipped' | 'too_short' | 'failed' | 'restore_failed';
     reductionRatio: number;
     charsBefore: number;
@@ -42,7 +42,7 @@ interface RunSummary {
 /** Blocks keep transcript order, oldest first, so the chart reads left to right like the conversation. */
 interface LastCompaction {
     at: string;
-    host: 'codex' | 'claude';
+    host: 'codex' | 'claude' | 'agy';
     status: RunSummary['status'];
     charsBefore: number;
     injectedPayloadChars: number;
@@ -55,7 +55,7 @@ interface LastCompaction {
 }
 type DecisionCode = 'k' | 's' | 'r' | 'p';
 /** Build only measured statistics. No chars/4 or claimed Codex billing-token savings. */
-export declare function stats(env?: Record<string, string | undefined>, agent?: 'codex' | 'claude'): Promise<{
+export declare function stats(env?: Record<string, string | undefined>, agent?: 'codex' | 'claude' | 'agy'): Promise<{
     measured: boolean;
     note: string;
     attempts: number;

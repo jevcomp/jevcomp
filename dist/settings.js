@@ -69,10 +69,11 @@ export function userSettings(env = process.env) {
     const stored = saved(env);
     const rawMode = env.JEVCOMP_RESTORE_MODE;
     const modeFromEnv = normalizedMode(rawMode);
-    const restoreMode = modeFromEnv ?? stored.restoreMode ?? 'preserve';
+    // Codex compaction costs the same with or without jevcomp, so by default it adds back only the short list.
+    const restoreMode = modeFromEnv ?? stored.restoreMode ?? 'minimal';
     const rawModeNormalized = (rawMode ?? '').trim().toLowerCase();
     const restoreModeWarning = rawMode !== undefined && rawModeNormalized !== '' && !modeFromEnv
-        ? `unknown restore mode ${JSON.stringify(rawModeNormalized)}; using ${stored.restoreMode ?? 'preserve'}`
+        ? `unknown restore mode ${JSON.stringify(rawModeNormalized)}; using ${stored.restoreMode ?? 'minimal'}`
         : undefined;
     const restoreMax = envNumber(env, ['JEVCOMP_RESTORE_MAX_CHARS', 'JEVCOMP_CONTEXT_CHARS']) ?? stored.restoreMaxChars ?? 60_000;
     const pinRecent = envNumber(env, ['JEVCOMP_PIN_RECENT_MESSAGES', 'JEVCOMP_PRESERVE_RECENT']) ?? stored.pinRecentMessages ?? 6;

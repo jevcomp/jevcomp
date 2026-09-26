@@ -45,6 +45,10 @@ Do not claim that hook mode rewrites the native Codex compaction request. It pre
 - `node "<installedPath>/dist/cli.js" settings restore-mode balanced`
 - `node "<installedPath>/dist/cli.js" dashboard` (restarts it; the plugin already starts it at `http://127.0.0.1:43127/` with each Codex session)
 - `node "<installedPath>/dist/cli.js" compact <rollout.jsonl> --context retained.txt --json retained.json`
+- `jevcomp codex [args]` (npm command: run Codex through Jev's local compaction proxy; dashboard entries show Codex runs answered locally)
+- `jevcomp install agy` (experimental Antigravity certificate setup; requires OpenSSL and asks once on Windows)
+- `jevcomp uninstall agy` (removes the Antigravity certificate)
+- `jevcomp agy [args]` (experimental pass-through proxy; captures generation requests only with `JEVCOMP_CAPTURE=1`, with no token savings yet)
 
 ## Files
 
@@ -54,7 +58,7 @@ Per-session files include state, a full retained normalized context archive, and
 
 ## Restore semantics
 
-Preferred modes are `preserve` (default), `balanced`, and `minimal`. The restore hooks set Codex `additionalContextLimit` to `0` intentionally so Codex does not apply its own generic hook-output spill on top of jevcomp's restore mode/cap. `JEVCOMP_RESTORE_MAX_CHARS` is therefore the plugin-level global cap for the selected evidence payload in all restore modes; mode-specific limits may be smaller.
+Preferred modes are `minimal` (default), `balanced`, and `preserve`. The restore hooks set Codex `additionalContextLimit` to `0` intentionally so Codex does not apply its own generic hook-output spill on top of jevcomp's restore mode/cap. `JEVCOMP_RESTORE_MAX_CHARS` is therefore the plugin-level global cap for the selected evidence payload in all restore modes; mode-specific limits may be smaller.
 
 People change settings with the `settings` menu in a terminal. From Codex, use `settings NAME VALUE` (names below) and show the result, which lists every setting in plain words. The user-facing controls are `restore-mode`, `restore-max-chars`, `pin-recent-messages`, `loss-threshold`, and `min-reduction-ratio`. Environment variables remain overrides for automation and compatibility.
 

@@ -34,7 +34,7 @@ test('settings page changes a setting and reports it back', async (t) => {
   assert.equal(snapshot.settings.find((item) => item.name === 'restore-mode').value, 'minimal');
   assert.equal(userSettings(env).restoreMode, 'minimal');
   assert.equal(snapshot.version, VERSION);
-  assert.deepEqual(snapshot.agents, { codex: null, claude: null });
+  assert.deepEqual(snapshot.agents, { codex: null, claude: null, agy: { installed: false } });
 });
 
 test('a Claude Code install is reported without Codex', async (t) => {
