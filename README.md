@@ -1,105 +1,70 @@
 # jevcomp
 
-When a conversation gets long, Codex and Claude Code **compact** it: they replace the old history with a summary written by the model. Exact details get lost that way (an error message, a file already read, a test result), and writing the summary costs a large request.
+When a conversation gets long, Codex, Claude Code and Antigravity **compact** it: they replace the old history with a summary written by the model. Exact details get lost that way (an error message, a file already read, a test result), and writing the summary costs a large request.
 
 jevcomp uses **Jev**, a small, fast AI model that only answers yes/no questions, to decide which old command outputs still matter:
 
-- **Codex:** Codex still writes its summary. Right after, jevcomp adds back the useful details the summary lost.
+- **Codex:** started with `jevcomp codex`, the compaction request never reaches OpenAI: jevcomp answers it with what Jev kept.
 - **Claude Code:** there is no summary. Jev removes or shortens old command outputs and the rest of the conversation stays word for word, which also skips the summary request.
+- **Antigravity (experimental):** `jevcomp agy` runs it through jevcomp, but saves nothing yet.
 
 Your own messages are never removed. If anything fails, the agent compacts the way it normally does. Each compaction makes a few small Jev requests, billed to your OpenRouter or TypeSafe key.
 
 ## Before you start
 
 - **Node.js 20 or newer** ([nodejs.org](https://nodejs.org)).
-- **Git**, used to download the plugin.
+- **Git**, used to download jevcomp.
 - An **API key** from [OpenRouter](https://openrouter.ai/keys) or TypeSafe.
 
-Codex and Claude Code can both use jevcomp on the same computer. They share the key, the settings, the history and the dashboard.
+## Install
 
-## Codex
-
-### Install
-
-```bash
-npm install -g --install-links github:jevcomp/jevcomp
-jevcomp install openrouter codex
-```
-
-Use `typesafe` if your key is from TypeSafe. Then start Codex with `jevcomp codex` instead of `codex` (see below); on the first start, type `/hooks` and approve the four jevcomp hooks.
-
-### Check
-
-Run `jevcomp doctor`. It is working when Codex shows `jevcomp dashboard: http://127.0.0.1:43127/` as a session starts.
-
-### Uninstall
-
-| Installed with | Run | What it removes |
-| --- | --- | --- |
-| Plugin (before 0.7.3) | Ask Codex `Uninstall jevcomp` | The plugin and its marketplace; stops the dashboard unless Claude Code still uses it |
-| Plugin (before 0.7.3), from a terminal | `codex plugin remove jevcomp@jevcomp` then `codex plugin marketplace remove jevcomp` | The plugin and its marketplace; the dashboard stops when you restart the computer |
-| npm | `jevcomp uninstall codex` | The four hooks; stops the dashboard unless Claude Code still uses it |
-
-## Real savings in Codex: `jevcomp codex`
-
-With the npm command installed, start Codex from a terminal with `jevcomp codex [args]`. This runs Codex through jevcomp's local proxy. When Jev returns a usable summary that meets the minimum reduction setting, the proxy answers Codex's compaction request locally instead of sending that request to OpenAI. If Jev errors or its result is unusable or below the minimum reduction, the original request is forwarded to Codex's real server.
-
-Only sessions started with `jevcomp codex` save tokens. Starting Codex with plain `codex` still runs the jevcomp hooks, which save nothing. In the dashboard, check the recent runs for a Codex entry; a compaction answered locally by Jev shows as completed. The dashboard records the run but does not estimate OpenAI billing-token savings.
-
-## Antigravity (experimental)
-
-`jevcomp agy [args]` currently sends Antigravity traffic through a local intermediary and forwards it. Set `JEVCOMP_CAPTURE=1` to save captured generation requests. It does not compact requests or provide token savings yet.
-
-Install its local certificate with `jevcomp install agy`. OpenSSL is required; on Windows, approve the certificate warning once by clicking **Yes**. Install OpenSSL with `winget install ShiningLight.OpenSSL.Light` if needed. Remove the certificate with `jevcomp uninstall agy`.
-
-## Claude Code
-
-### Install
-
-Pick one way.
-
-**Plugin.** In a terminal:
-
-```bash
-claude plugin marketplace add jevcomp/jevcomp
-claude plugin install jevcomp@jevcomp
-```
-
-**npm (recommended).** Also gives you the `jevcomp` command, needed for `jevcomp codex`, the only way that saves tokens:
-
-```bash
-npm install -g --install-links github:jevcomp/jevcomp
-jevcomp install openrouter claude
-```
-
-Open Claude Code. The first time, jevcomp asks you to restart it once; after that it is on.
-
-The key comes from the one saved by `jevcomp install` or for Codex, or from `OPENROUTER_API_KEY` / `TYPESAFE_API_KEY`. If you have none of these, run `/plugin configure jevcomp@jevcomp` in Claude Code and enter it there.
-
-### Check
-
-Ask Claude Code `Check jevcomp` (npm: `jevcomp doctor`). It is working when Claude Code shows `jevcomp dashboard: http://127.0.0.1:43127/` as a session starts.
-
-### Uninstall
-
-| Installed with | Run | What it removes |
-| --- | --- | --- |
-| Plugin | `claude plugin uninstall jevcomp@jevcomp` then `claude plugin marketplace remove jevcomp` | The plugin and its marketplace; the dashboard stops when you restart the computer |
-| npm | `jevcomp uninstall claude` | The plugin and its marketplace; stops the dashboard unless Codex still uses it |
-
-## Both with npm
+The same for every agent:
 
 ```bash
 npm install -g --install-links github:jevcomp/jevcomp
 jevcomp install
 ```
 
-`install` asks where to install (answer both), the provider and the key. `jevcomp uninstall` removes jevcomp from both and stops the dashboard.
+`install` asks which agents to connect (Codex, Claude Code, Antigravity or all), the provider and the key. To skip the questions: `jevcomp install openrouter codex` (or `typesafe`, and `claude`, `agy` or `all`). Run it again to change the key or add an agent. The agents share the key, the settings, the history and the dashboard.
+
+Then, for each agent:
+
+- **Codex:** start it with `jevcomp codex` instead of `codex`; only that saves tokens. On the first start, type `/hooks` and approve the four jevcomp hooks. Plain `codex` still runs those hooks, which save nothing.
+- **Claude Code:** open `claude` as usual. The first time, jevcomp asks you to restart it once; after that it is on.
+- **Antigravity (experimental):** start it with `jevcomp agy`. `install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the certificate warning. It needs OpenSSL (`winget install ShiningLight.OpenSSL.Light`). It saves nothing yet; `JEVCOMP_CAPTURE=1` saves the requests it sees.
+
+### Claude Code only: as a plugin
+
+Claude Code can also get jevcomp as a plugin, without npm:
+
+```bash
+claude plugin marketplace add jevcomp/jevcomp
+claude plugin install jevcomp@jevcomp
+```
+
+It saves the same as the npm install. The key comes from one saved by `jevcomp install`, from `OPENROUTER_API_KEY` / `TYPESAFE_API_KEY`, or from `/plugin configure jevcomp@jevcomp` in Claude Code.
+
+## Check
+
+Run `jevcomp doctor` (plugin: ask Claude Code `Check jevcomp`). It is working when the agent shows `jevcomp dashboard: http://127.0.0.1:43127/` as a session starts.
+
+## How Codex saves tokens
+
+`jevcomp codex [args]` runs Codex through a local proxy. When Jev returns a usable result that meets the minimum reduction setting, the proxy answers Codex's compaction request itself instead of sending it to OpenAI. If Jev fails, or its result is too big or cuts too little, the request goes to OpenAI as usual. In the dashboard, a compaction answered by Jev shows as completed.
+
+## Uninstall
+
+| Run | What it removes |
+| --- | --- |
+| `jevcomp uninstall` | jevcomp from every agent, and stops the dashboard |
+| `jevcomp uninstall codex` / `claude` / `agy` | Only from that agent (`agy` also removes the certificate); the dashboard stays while another agent uses it |
+| `claude plugin uninstall jevcomp@jevcomp` then `claude plugin marketplace remove jevcomp` | The Claude Code plugin |
+| `codex plugin remove jevcomp@jevcomp` then `codex plugin marketplace remove jevcomp` | The Codex plugin, if you installed it before 0.7.3 |
 
 ## Remove everything
 
-1. Uninstall from each agent as shown above, or run `jevcomp uninstall` if you used npm.
-2. With npm, remove the command: `npm uninstall -g jevcomp`.
+1. Run `jevcomp uninstall` (and remove the Claude Code plugin, if you used it).
+2. Remove the command: `npm uninstall -g jevcomp`.
 3. Delete your key and settings, `~/.config/jevcomp`, and your history, `~/.jevcomp`.
 4. Claude Code only: remove the `"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"` line that jevcomp added under `env` in `~/.claude/settings.json`, unless another plugin needs it.
 
@@ -107,7 +72,7 @@ jevcomp install
 
 Open **http://127.0.0.1:43127/**. It starts by itself when a Codex or Claude Code session starts and keeps running until you restart the computer.
 
-- Forgot the address? Ask the agent `Where is the jevcomp dashboard?` (npm: `jevcomp doctor`).
+- Forgot the address? Ask the agent `Where is the jevcomp dashboard?` (or run `jevcomp doctor`).
 - Restart it: `jevcomp dashboard`, or ask the agent to restart the jevcomp dashboard.
 - Another port: set `JEVCOMP_DASHBOARD_PORT`, for example `43200`.
 
@@ -155,11 +120,7 @@ Rarely needed; set them as environment variables.
 
 For each finished command, Jev answers two questions: would removing the command and its output lose something still needed, and would shortening the output. The answer becomes **Keep**, **Shorten** (the first characters plus a note) or **Remove** (the command can be run again). Your messages and Codex's instructions are never removed. Common secret patterns are hidden before anything goes to Jev, but not every possible secret can be recognised.
 
-**Codex** does not let a hook replace its summary, so jevcomp works around it:
-
-1. Before compaction (`PreCompact`), Jev picks what is worth keeping.
-2. Codex compacts normally, and `PostCompact` confirms it.
-3. When the session resumes (`SessionStart`, or the next prompt as a fallback), jevcomp adds back only the selected text that is not already in the new history word for word.
+**Codex**, started with `jevcomp codex`, sends its compaction request to jevcomp's local proxy, which answers it with Jev's cuts instead of letting OpenAI write a summary. Started with plain `codex`, the jevcomp hooks only add back, after Codex's own summary, the selected text the summary lost.
 
 **Claude Code** lets a plugin replace the compaction itself (an early-access feature called function hooks), so there jevcomp hands back the conversation with Jev's cuts instead of a summary.
 
