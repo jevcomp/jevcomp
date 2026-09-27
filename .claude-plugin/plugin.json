@@ -1,6 +1,6 @@
 {
   "name": "jevcomp",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Jev decides what Claude Code keeps when it compacts, instead of a model-written summary.",
   "author": { "name": "jevcomp contributors" },
   "homepage": "https://github.com/jevcomp/jevcomp",
