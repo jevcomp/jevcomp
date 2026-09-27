@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
+import { createInterface } from 'node:readline/promises';
 import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, sep } from 'node:path';
@@ -43,8 +44,8 @@ function help(): void {
 Dashboard: ${dashboardAddress()} (opens with each Codex or Claude Code session)`);
 }
 
-type Agent = 'codex' | 'claude';
-const AGENT_NAMES: Record<Agent, string> = { codex: 'Codex', claude: 'Claude Code' };
+type Agent = 'codex' | 'claude' | 'agy';
+const AGENT_NAMES: Record<Agent, string> = { codex: 'Codex', claude: 'Claude Code', agy: 'Antigravity' };
 
 function hasCommand(name: string): boolean {
   try { execFileSync(name, ['--version'], { stdio: 'ignore', timeout: 20_000, windowsHide: true }); return true; }
@@ -53,21 +54,22 @@ function hasCommand(name: string): boolean {
 
 function agentArgs(args: readonly string[]): Agent[] | undefined {
   if (args.includes('all') || args.includes('both')) return ['codex', 'claude'];
-  const picked = (['codex', 'claude'] as const).filter((agent) => args.includes(agent));
+  const picked = (['codex', 'claude', 'agy'] as const).filter((agent) => args.includes(agent));
   return picked.length ? picked : undefined;
 }
 
 async function chooseAgents(args: readonly string[]): Promise<Agent[]> {
   const requested = agentArgs(args);
   if (requested) return requested;
-  const found = (['codex', 'claude'] as const).filter(hasCommand);
-  if (!found.length) throw new Error('neither codex nor claude was found; install Codex or Claude Code first');
-  if (found.length === 1 || !interactive()) return [...found];
-  const answer = await ask('Install for: 1) Codex  2) Claude Code  3) both  [3]: ');
-  if (!answer || answer === '3') return ['codex', 'claude'];
-  if (answer === '1') return ['codex'];
-  if (answer === '2') return ['claude'];
-  throw new Error(`unknown choice: ${answer}`);
+  const found = (['codex', 'claude', 'agy'] as const).filter(hasCommand);
+  if (!found.length) throw new Error('none of codex, claude or agy was found; install one of them first');
+  if (found.length === 1 || !interactive()) return found.filter((agent) => agent !== 'agy');
+  const names = found.map((agent, index) => `${index + 1}) ${AGENT_NAMES[agent]}`).join('  ');
+  const answer = await ask(`Install for: ${names}  ${found.length + 1}) all  (e.g. 1,3) [${found.length + 1}]: `);
+  if (!answer || answer === String(found.length + 1)) return [...found];
+  const picked = answer.split(/[\s,]+/).map((choice) => found[Number(choice) - 1]);
+  if (picked.some((agent) => !agent)) throw new Error(`unknown choice: ${answer}`);
+  return [...new Set(picked.filter((agent): agent is Agent => !!agent))];
 }
 
 function claudePluginInstalled(): boolean {
@@ -95,11 +97,8 @@ async function installClaude(): Promise<void> {
 function dashboardAddress(): string { return `http://127.0.0.1:${dashboardPort(process.env)}/`; }
 
 async function ask(question: string): Promise<string> {
-  process.stdout.write(question);
-  process.stdin.resume();
-  return new Promise<string>((resolve) => {
-    process.stdin.once('data', (chunk: any) => { process.stdin.pause(); resolve(String(chunk).trim()); });
-  });
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try { return (await prompt.question(question)).trim(); } finally { prompt.close(); }
 }
 
 function interactive(): boolean { return !!process.stdin.isTTY && !!process.stdout.isTTY; }
@@ -176,11 +175,10 @@ async function saveKey(provider: Exclude<JevProvider, 'auto'>): Promise<void> {
 }
 
 async function install(args: readonly string[]): Promise<void> {
-  if (args.includes('agy')) await installAgyCa();
-  if (args.length === 1 && args[0] === 'agy') return;
-  args = args.filter((arg) => arg !== 'agy');
   const agents = await chooseAgents(args);
-  const provider = await chooseProvider(args.find((arg) => !['codex', 'claude', 'all', 'both'].includes(arg)));
+  if (agents.includes('agy')) await installAgyCa();
+  if (agents.every((agent) => agent === 'agy')) return;
+  const provider = await chooseProvider(args.find((arg) => !['codex', 'claude', 'agy', 'all', 'both'].includes(arg)));
   await saveKey(provider);
   if (agents.includes('claude')) await installClaude();
   if (!agents.includes('codex')) {
@@ -190,11 +188,11 @@ async function install(args: readonly string[]): Promise<void> {
   const runtimeCli = await installRuntime(fileURLToPath(import.meta.url), process.env);
   await installHooks(runtimeCli);
   console.log('Connected to Codex. Restart Codex, type /hooks and approve the four jevcomp hooks.');
-  console.log(`Dashboard: ${dashboardAddress()} (opens with each ${agents.map((agent) => AGENT_NAMES[agent]).join(' or ')} session)`);
+  console.log(`Dashboard: ${dashboardAddress()} (opens with each ${agents.filter((agent) => agent !== 'agy').map((agent) => AGENT_NAMES[agent]).join(' or ')} session)`);
 }
 
 async function uninstall(args: readonly string[]): Promise<void> {
-  if (args.includes('agy')) await uninstallAgyCa();
+  if (args.includes('agy') || args.includes('all') || !args.length) await uninstallAgyCa();
   if (args.length === 1 && args[0] === 'agy') return;
   args = args.filter((arg) => arg !== 'agy');
   const agents = agentArgs(args) ?? ['codex', 'claude'];

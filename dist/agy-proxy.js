@@ -63,13 +63,13 @@ export function agyCaInstalled(thumbprint) {
 export async function installAgyCa(env = process.env) {
     console.warn('Windows will show a certificate security warning. Confirm only if you trust this local jevcomp Antigravity CA.');
     const { directory } = await ensureAgyCertificate(env);
-    execFileSync('powershell.exe', ['-NoProfile', '-Command', `Import-Certificate -FilePath '${join(directory, 'ca.cer')}' -CertStoreLocation Cert:\\CurrentUser\\Root | Out-Null`], { stdio: 'inherit', windowsHide: false });
+    execFileSync('certutil.exe', ['-user', '-addstore', 'Root', join(directory, 'ca.cer')], { stdio: 'ignore', windowsHide: false });
 }
 export async function uninstallAgyCa(env = process.env) {
     const thumbprint = await agyCertificateThumbprint(env);
     if (!thumbprint)
         return;
-    execFileSync('powershell.exe', ['-NoProfile', '-Command', `Get-ChildItem Cert:\\CurrentUser\\Root | Where-Object Thumbprint -eq '${thumbprint}' | Remove-Item`], { stdio: 'inherit', windowsHide: true });
+    execFileSync('certutil.exe', ['-user', '-delstore', 'Root', thumbprint], { stdio: 'ignore', windowsHide: false });
 }
 export async function startAgyProxy(env = process.env, options = {}) {
     const { directory } = await ensureAgyCertificate(env);
