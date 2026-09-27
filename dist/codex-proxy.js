@@ -235,16 +235,19 @@ async function localCompaction(body, env) {
             return undefined;
         }
         const result = await compactMessages(messages, { ...jev, auditObserver: audit?.observe });
-        const summary = renderMessages(result.messages.filter(message => message.role !== 'developer' && message.role !== 'system'));
-        const outputTokens = estimateTokens(summary);
-        const rejection = reductionRatio(result) < minimum ? 'below_minimum' : !summary.trim() ? 'empty_output' : outputTokens > MAX_COMPACTION_SUMMARY_TOKENS ? 'output_too_large' : undefined;
-        const recorded = await tryAppendHistory({ ...localRun, status: rejection ? 'skipped' : 'prepared', stats: result.stats, decisions: result.decisions, retainedChars: summary.length, detail: rejection ?? 'Responses API compaction answered locally by Jev' }, env);
+        const belowMinimum = reductionRatio(result) < minimum;
+        const summary = belowMinimum ? '' : renderMessages(result.messages.filter(message => message.role !== 'developer' && message.role !== 'system'));
+        const outputTokens = belowMinimum ? 0 : estimateTokens(summary);
+        const rejection = belowMinimum ? 'below_minimum' : !summary.trim() ? 'empty_output' : outputTokens > MAX_COMPACTION_SUMMARY_TOKENS ? 'output_too_large' : undefined;
+        const recorded = await tryAppendHistory({ ...localRun, status: rejection ? 'skipped' : 'prepared', stats: result.stats, decisions: result.decisions, retainedChars: rejection ? undefined : summary.length, detail: rejection ?? 'Responses API compaction answered locally by Jev' }, env);
         if (rejection) {
             await audit?.finish('rejected', rejection, recorded);
             return undefined;
         }
         const sse = compactSse(summary, outputTokens, typeof payload.model === 'string' ? payload.model : undefined);
-        await tryAppendHistory({ ...localRun, phase: 'postcompact', status: 'restored', stats: result.stats, retainedChars: summary.length, injectedChars: 0, injectedPayloadChars: 0 }, env);
+        const postRecorded = await tryAppendHistory({ ...localRun, phase: 'postcompact', status: 'restored', stats: result.stats, retainedChars: summary.length, injectedChars: 0, injectedPayloadChars: 0 }, env);
+        if (!postRecorded)
+            audit?.manifest.gaps.push('postcompact history not recorded');
         await audit?.finish('result_produced', 'response_prepared', recorded, summary);
         return { body: sse, auditId: audit?.manifest.id };
     }

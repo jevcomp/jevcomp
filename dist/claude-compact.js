@@ -37,7 +37,9 @@ export async function compactForClaude(body, baseEnv) {
             }
         }
         const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'prepared', stats: result.stats, decisions: result.decisions, retainedChars: result.stats.charsAfter }, env);
-        await tryAppendHistory({ ...row, at: new Date().toISOString(), phase: 'restore', status: 'restored', stats: result.stats, retainedChars: result.stats.charsAfter, injectedChars: result.stats.charsAfter, injectedPayloadChars: result.stats.charsAfter, detail: 'Claude Code kept the Jev-cut conversation instead of a summary' }, env);
+        const restoreRecorded = await tryAppendHistory({ ...row, at: new Date().toISOString(), phase: 'restore', status: 'restored', stats: result.stats, retainedChars: result.stats.charsAfter, injectedChars: result.stats.charsAfter, injectedPayloadChars: result.stats.charsAfter, detail: 'Claude Code kept the Jev-cut conversation instead of a summary' }, env);
+        if (!restoreRecorded)
+            audit?.manifest.gaps.push('restore history not recorded');
         const response = {
             apply: true,
             dropped: result.decisions.filter((d) => d.action === 'drop_call').map((d) => d.callId),

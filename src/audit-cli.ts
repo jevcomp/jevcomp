@@ -190,7 +190,16 @@ export async function auditCommand(args: string[], env: Env = process.env): Prom
     const requested = option(rest, '--ids')?.split(',').filter(Boolean) ?? report.sample.selected.map(item => item.id);
     const cases = [];
     for (const id of requested) cases.push(await compactCase(env, id, Math.max(1024, Math.floor(max / Math.max(1, requested.length))), analysis));
-    display({ report, cases, disclosure: 'Selected local conversation excerpts; inspect before sending to another AI.' }, max);
+    const simulations = [];
+    for (const threshold of [0.4, 0.5, 0.6]) {
+      const simulation = await simulateAudit(env, analysis, threshold, threshold);
+      const evaluated = simulation.results.filter((item: any) => item.status === undefined);
+      simulations.push({ threshold, evaluated: evaluated.length, unavailable: simulation.results.length - evaluated.length,
+        changedEvaluations: evaluated.filter((item: any) => item.changes.length).length,
+        proposedActionsChanged: evaluated.reduce((sum: number, item: any) => sum + item.changes.length, 0),
+        wouldPassLocalChecks: evaluated.filter((item: any) => item.accepted).length });
+    }
+    display({ report, simulations, cases, disclosure: 'Selected local conversation excerpts; inspect before sending to another AI. Simulations do not predict later behavior.' }, max);
     return;
   }
   throw Error(`unknown audit command: ${command}`);

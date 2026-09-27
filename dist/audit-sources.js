@@ -2,6 +2,17 @@ import { open, readdir } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { auditRoot, digest, readJson, atomicJson, reserveBytes, auditConfig, withAuditLock } from './audit-store.js';
+async function readExact(file, position, length) {
+    const buffer = Buffer.alloc(length);
+    let read = 0;
+    while (read < length) {
+        const result = await file.read(buffer, read, length - read, position + read);
+        if (!result.bytesRead)
+            throw Error('source file ended before expected bytes');
+        read += result.bytesRead;
+    }
+    return buffer;
+}
 async function findFiles(root, nameMatches, depth = 0) {
     if (depth > 6)
         return [];
@@ -99,8 +110,7 @@ export async function indexTranscript(env, manifest) {
     const file = await open(path, 'r');
     try {
         const size = (await file.stat()).size;
-        const prefix = Buffer.alloc(Math.min(size, 4096));
-        await file.read(prefix, 0, prefix.length, 0);
+        const prefix = await readExact(file, 0, Math.min(size, 4096));
         const prefixHash = digest(prefix);
         let index;
         let existing = false;
@@ -108,6 +118,12 @@ export async function indexTranscript(env, manifest) {
             index = await readJson(cachePath);
             if (index.schema !== 1 || index.path !== path || index.offset > size || index.prefixHash !== prefixHash)
                 throw Error('source changed');
+            if (index.offset) {
+                const tailLength = Math.min(index.offset, 4096);
+                const tail = await readExact(file, index.offset - tailLength, tailLength);
+                if (!index.tailHash || digest(tail) !== index.tailHash)
+                    throw Error('source tail changed');
+            }
             existing = true;
         }
         catch {
@@ -148,6 +164,9 @@ export async function indexTranscript(env, manifest) {
             }
         }
         index.offset = pendingOffset;
+        const tailLength = Math.min(index.offset, 4096);
+        const tail = await readExact(file, index.offset - tailLength, tailLength);
+        index.tailHash = digest(tail);
         index.updatedAt = new Date().toISOString();
         index.gaps = [...new Set(index.gaps.filter(gap => gap !== 'source tail not indexed'))];
         if (index.offset < size)
@@ -168,9 +187,8 @@ export async function sourceRecord(index, event) {
         throw Error('invalid source offset');
     const file = await open(index.path, 'r');
     try {
-        const buffer = Buffer.alloc(event.length);
-        const { bytesRead } = await file.read(buffer, 0, buffer.length, event.offset);
-        if (bytesRead !== event.length || digest(buffer) !== event.hash)
+        const buffer = await readExact(file, event.offset, event.length);
+        if (digest(buffer) !== event.hash)
             throw Error('source record replaced or unavailable');
         return JSON.parse(buffer.toString('utf8'));
     }

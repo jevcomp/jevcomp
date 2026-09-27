@@ -8,6 +8,8 @@ import { renderMessages } from './render.js';
 export function expectedAction(decision, manifest, dropLimit, truncateLimit) {
     if (decision.pinned)
         return 'keep';
+    if (![decision.dropLoss, decision.truncateLoss].every(value => Number.isFinite(value) && value >= 0 && value <= 1) || !Number.isSafeInteger(decision.resultChars) || decision.resultChars < 0)
+        return undefined;
     const limit = Number(manifest.settings.lossThreshold);
     const head = Number(manifest.settings.truncateHeadChars);
     if (!Number.isFinite(limit) || !Number.isInteger(head))

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { compact } from '../dist/compact.js';
 import { beginAudit, bindAuditSource, auditManifests } from '../dist/audit.js';
-import { analyzeAudit, auditReport, inspectAuditCase, simulateAudit } from '../dist/audit-analysis.js';
+import { analyzeAudit, auditReport, expectedAction, inspectAuditCase, simulateAudit } from '../dist/audit-analysis.js';
 import { auditConfig, auditRoot, configureAudit, atomicJson } from '../dist/audit-store.js';
 import { appendHistory } from '../dist/store.js';
 import { auditCommand } from '../dist/audit-cli.js';
@@ -18,6 +18,12 @@ const transcript = () => [
   { role: 'user', text: '', toolCalls: [], toolResults: [{ callId: 'call-one', output: 'source content '.repeat(200) }] },
   { role: 'assistant', text: 'I found the answer', toolCalls: [] },
 ];
+
+test('invalid scores remain unauditable instead of appearing policy compliant', () => {
+  const manifest = { settings: { lossThreshold: 0.5, truncateHeadChars: 300 } };
+  const decision = { pinned: false, dropLoss: Number.NaN, truncateLoss: 0.1, resultChars: 1000 };
+  assert.equal(expectedAction(decision, manifest), undefined);
+});
 
 async function setup(mode = 'evidence') {
   const root = await mkdtemp(join(tmpdir(), 'jev-audit-'));
@@ -48,6 +54,7 @@ test('audit stores evidence once, checks the policy, finds later identical outpu
   await evaluate(env, 'audit-two', asker);
   const secondObjects = (await readdir(join(auditRoot(env), 'objects'))).length;
   assert.ok(secondObjects <= firstObjects + 6, `evidence should share transcript nodes (${firstObjects}, ${secondObjects})`);
+  await appendFile(source, JSON.stringify({ type: 'system', sessionId: 'session-one', timestamp: new Date(Date.now() + 500).toISOString(), padding: 'x'.repeat(5000) }) + '\n');
   await appendFile(source, JSON.stringify({ type: 'system', subtype: 'compact_boundary', sessionId: 'session-one', timestamp: new Date(Date.now() + 1000).toISOString() }) + '\n');
   await appendFile(source, JSON.stringify({ type: 'user', sessionId: 'session-one', timestamp: new Date(Date.now() + 2000).toISOString(), message: { content: [{ type: 'tool_result', tool_use_id: 'new-call', content: 'source content '.repeat(200) }] } }) + '\n');
   const analysis = await analyzeAudit(env);
@@ -64,6 +71,9 @@ test('audit stores evidence once, checks the policy, finds later identical outpu
   assert.equal(original.results[0].changes.length, 0);
   const conservative = await simulateAudit(env, analysis, 0, 0, 0);
   assert.equal(conservative.results[0].changes[0].to, 'keep');
+  const sourceText = await readFile(source, 'utf8');
+  await writeFile(source, sourceText.replace('source content '.repeat(200), 'revised content'.padEnd('source content '.repeat(200).length, ' ')));
+  assert.equal((await analyzeAudit(env)).cases[0].observation.matches.length, 0);
 });
 
 test('metadata capture records no conversation objects and quota failure leaves compaction intact', async () => {
@@ -106,6 +116,7 @@ test('audit CLI reports, exports, records a human verdict and prunes only expire
     assert.equal(JSON.parse(lines.at(-1)).results[0].changes[0].to, 'keep');
     await auditCommand(['export', '--ids', id, '--max-chars', '200000'], env);
     assert.equal(JSON.parse(lines.at(-1)).cases.length, 1);
+    assert.equal(JSON.parse(lines.at(-1)).simulations.length, 3);
     await auditCommand(['prune'], env);
     assert.equal(JSON.parse(lines.at(-1)).keptEvaluations, 1);
   } finally { console.log = original; }

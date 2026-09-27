@@ -20,6 +20,7 @@ export interface SourceIndex {
     sessionId: string;
     offset: number;
     prefixHash: string;
+    tailHash?: string;
     events: SourceEvent[];
     gaps: string[];
     updatedAt: string;
