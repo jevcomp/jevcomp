@@ -27,11 +27,29 @@ jevcomp install
 
 `install` asks which agents to connect (Codex, Claude Code, Antigravity or all), the provider and the key. To skip the questions: `jevcomp install openrouter codex` (or `typesafe`, and `claude`, `agy` or `all`). Run it again to change the key or add an agent. The agents share the key, the settings, the history and the dashboard.
 
-Then, for each agent:
+## Use
 
-- **Codex:** start it with `jevcomp codex` instead of `codex`; only that saves tokens. On the first start, type `/hooks` and approve the four jevcomp hooks. Plain `codex` still runs those hooks, which save nothing.
-- **Claude Code:** open `claude` as usual. The first time, jevcomp asks you to restart it once; after that it is on.
-- **Antigravity (experimental):** start it with `jevcomp agy`. `install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the certificate warning. It needs OpenSSL (`winget install ShiningLight.OpenSSL.Light`). It saves nothing yet; `JEVCOMP_CAPTURE=1` saves the requests it sees.
+After `jevcomp install`, open each agent like this:
+
+| Agent | Open it with | What changes |
+|---|---|---|
+| Codex | `jevcomp codex` | Saves tokens: jevcomp answers the compaction itself. Plain `codex` saves nothing. |
+| Claude Code | `claude` (as usual) | Saves tokens on every compaction. The first time, restart Claude Code once. |
+| Antigravity (experimental) | `jevcomp agy` | Runs through jevcomp but saves nothing yet. |
+
+Everything you type after the agent name goes to the agent unchanged:
+
+```bash
+jevcomp codex                      # interactive session
+jevcomp codex exec "fix the tests" # one-shot task
+jevcomp codex resume --last        # continue the last session
+claude                             # Claude Code, nothing different
+jevcomp agy -p "hello"             # Antigravity, one question
+```
+
+- **Codex, first start:** type `/hooks` and approve the four jevcomp hooks. To force a compaction and see it work, type `/compact`.
+- **Antigravity:** `jevcomp install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the warning. It needs OpenSSL (`winget install ShiningLight.OpenSSL.Light`). Without the certificate, `jevcomp agy` opens plain Antigravity. `JEVCOMP_CAPTURE=1` saves the requests it sees.
+- **Dashboard:** http://127.0.0.1:43127/ opens with Codex and Claude Code sessions; `jevcomp dashboard` opens it by hand.
 
 ### Claude Code only: as a plugin
 
