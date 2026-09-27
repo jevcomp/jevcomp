@@ -35,17 +35,7 @@ After `jevcomp install`, open each agent like this:
 |---|---|---|
 | Codex | `jevcomp codex` | Saves tokens: jevcomp answers the compaction itself. Plain `codex` saves nothing. |
 | Claude Code | `claude` (as usual) | Saves tokens on every compaction. The first time, restart Claude Code once. |
-| Antigravity (experimental) | `jevcomp agy` | Runs through jevcomp but saves nothing yet. |
-
-Everything you type after the agent name goes to the agent unchanged:
-
-```bash
-jevcomp codex                      # interactive session
-jevcomp codex exec "fix the tests" # one-shot task
-jevcomp codex resume --last        # continue the last session
-claude                             # Claude Code, nothing different
-jevcomp agy -p "hello"             # Antigravity, one question
-```
+| Antigravity (experimental) | `jevcomp agy` | Runs through jevcomp but saves nothing yet: jevcomp does not know yet which Antigravity request is the compaction, so it has nothing to replace. |
 
 - **Codex, first start:** type `/hooks` and approve the four jevcomp hooks. To force a compaction and see it work, type `/compact`.
 - **Antigravity:** `jevcomp install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the warning. It needs OpenSSL (`winget install ShiningLight.OpenSSL.Light`). Without the certificate, `jevcomp agy` opens plain Antigravity. `JEVCOMP_CAPTURE=1` saves the requests it sees.
