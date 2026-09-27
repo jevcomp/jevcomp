@@ -435,6 +435,7 @@ table.rb th,table.rb td{white-space:nowrap}table.rb .rb-grow{width:100%}
     <div class="groups">
      <div class="card group"><div class="group-head"><h2>Comportamento</h2><span class="small muted" id="behavior-sub">Cada mudança é salva na hora</span></div>
       <div id="behavior"></div>
+      <div class="setting" id="audit-setting"><h3>Auditoria das decisões</h3><p id="audit-description"></p><div id="audit-controls"></div></div>
       <div class="setting" id="reset-area"><h3>Voltar ao padrão</h3><p>Desfaz as mudanças acima. Provedor e chave continuam como estão.</p><div class="control"></div></div>
      </div>
     </div>
@@ -641,14 +642,19 @@ function renderSettings(s){
  if(!codex&&!claude&&!agy)cards+=card(AGENT_TITLE[agent],'Como o jevcomp está ligado ao '+AGENT_TITLE[agent],'<p class="conn-note warn">O jevcomp não está instalado no '+AGENT_TITLE[agent]+'.</p>');
  $('#agents-info').innerHTML=cards+card('Dashboard','Este painel','<div class="info"><span>Endereço</span><b class="num">'+esc(s.dashboardUrl)+'</b></div>');
  $('#behavior-sub').textContent=installedAgents(s).length>1?'Vale para '+installedAgents(s).map(id=>AGENT_TITLE[id]).join(' e ')+' · salvo na hora':'Cada mudança é salva na hora';
- $('#behavior').innerHTML=s.settings.filter(item=>agent==='codex'||!SETTING_TEXT[item.name].codexOnly).map(item=>{
+  $('#behavior').innerHTML=s.settings.filter(item=>agent==='codex'||!SETTING_TEXT[item.name].codexOnly).map(item=>{
   const text=SETTING_TEXT[item.name];
   const choices=item.choices.some(c=>same(c,item.value))?item.choices:item.choices.concat([item.value]);
   const locked=!!item.lockedBy;
   const buttons=choices.map(c=>'<button type="button" data-value="'+esc(c)+'" aria-pressed="'+same(c,item.value)+'"'+(locked?' disabled':'')+'>'+esc(text.label(c))+'</button>').join('');
   const note=(locked?'<span class="note">Definido pela variável '+esc(item.lockedBy)+' no seu sistema. Remova a variável para mudar aqui.</span>':'');
   return '<div class="setting"><h3>'+text.title+'</h3><p>'+text.help.replace('AGENT',AGENT_NAME[agent])+'</p><div class="control seg'+(text.numbers?' numbers':'')+'" role="group" aria-label="'+text.title+'" data-name="'+item.name+'"'+(locked?' aria-disabled="true"':'')+'>'+buttons+'</div>'+note+'</div>';
- }).join('');
+  }).join('');
+  const audit=s.audit;
+  $('#audit-description').textContent=!audit.supported?'Auditoria disponível para Codex e Claude Code.':audit.mode==='evidence'
+   ?'O modo Evidências guarda localmente conteúdo das conversas e resultados a partir da próxima compactação para inspecionar decisões. As informações podem conter dados privados.'
+   :'O modo Metadados registra, a partir da próxima compactação, pontuações, tamanhos e hashes, sem guardar o conteúdo da conversa.';
+  $('#audit-controls').innerHTML=!audit.supported?'<p class="note">Este agente ainda não fornece os dados necessários para auditoria.</p>':'<div class="control seg" role="group" aria-label="Modo da auditoria"><button type="button" data-audit-mode="metadata" aria-pressed="'+(audit.mode==='metadata')+'">Metadados</button><button type="button" data-audit-mode="evidence" aria-pressed="'+(audit.mode==='evidence')+'">Evidências</button></div><div class="control" style="margin-top:10px"><button class="btn '+(audit.enabled?'':'primary')+'" type="button" data-audit-toggle aria-pressed="'+audit.enabled+'">'+(audit.enabled?'Desativar auditoria':'Ativar auditoria')+'</button><span class="small muted" style="margin-left:10px">'+(audit.enabled?'Ativa para '+AGENT_TITLE[agent]:'Desligada para '+AGENT_TITLE[agent])+'</span></div>';
 }
 function settingsUrl(){return '/api/settings?agent='+encodeURIComponent(agent||'codex')}
 function loadSettings(){return fetch(settingsUrl(),{cache:'no-store'}).then(r=>r.json()).then(renderSettings).catch(e=>toast('Erro ao ler as configurações: '+e.message,true))}
@@ -675,6 +681,12 @@ $('#connection').addEventListener('submit',e=>{
  send({action:'key',provider,key},switching?'Chave salva. Agora usando '+PROVIDER_NAME[provider]:'Chave salva');
 });
 $('#behavior').addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.disabled)return;send({action:'setting',name:b.closest('.seg').dataset.name,value:b.dataset.value})});
+$('#audit-controls').addEventListener('click',e=>{
+ const b=e.target.closest('button');if(!b||b.disabled||!settingsState?.audit.supported)return;
+ const mode=b.dataset.auditMode||settingsState.audit.mode;
+ const enabled=b.hasAttribute('data-audit-toggle')?!settingsState.audit.enabled:settingsState.audit.enabled;
+ send({action:'audit',enabled,mode},enabled?'Auditoria ativada para '+AGENT_TITLE[agent]:'Configuração da auditoria salva');
+});
 function showReset(){
  const area=$('#reset-area .control');
  area.innerHTML='<button class="btn quiet" type="button" id="reset">Restaurar padrões</button>';

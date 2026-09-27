@@ -222,7 +222,7 @@ Nomes abaixo são propostas, não comandos existentes:
 - `jevcomp audit review <case-id>`: parecer humano persistido.
 - `jevcomp audit prune`: aplicar retenção configurada e limpar objetos sem referências, com resumo do que foi removido.
 
-Relatório padrão com limite proposto de 16 KiB, totais, funil de encurtamento, cobertura e referências para detalhes. Corte de exibição deve ser explícito e não cortar silenciosamente a análise. Exportar texto/JSON sob demanda, sem enviar a serviço externo. Não adicionar painel novo nem redesenhar dashboard nesta entrega; a CLI é a superfície completa de auditoria.
+Relatório padrão com limite proposto de 16 KiB, totais, funil de encurtamento, cobertura e referências para detalhes. Corte de exibição deve ser explícito e não cortar silenciosamente a análise. Exportar texto/JSON sob demanda, sem enviar a serviço externo. A CLI é a superfície de análise; as Configurações do dashboard também oferecem ativação/desativação por agente e escolha do modo.
 
 ## 13. Integração técnica prevista
 
@@ -297,6 +297,6 @@ Recomendação: aprovar a solução completa acima, com coleta desligada por pad
 
 Bloqueios técnicos a resolver durante a implementação: identidade/fonte nativa confiável do Claude, confirmação observável de aplicação em ambos os hosts e lifecycle de gravação no processo curto. Não estão declarados resolvidos neste plano.
 
-Registro de execução: `src/audit-store.ts`, `src/audit.ts`, `src/audit-sources.ts`, `src/audit-analysis.ts` e `src/audit-cli.ts` implementam a coleta e a análise. Os adaptadores e a CLI foram integrados; `dist` é gerado pelo build. Os testes com transporte Jev local e adaptadores do produto validam a neutralidade das requisições, rejeições, objetos compartilhados, correlação, simulação, revisão e retenção. O pacote npm contém os novos módulos.
+Registro de execução: `src/audit-store.ts`, `src/audit.ts`, `src/audit-sources.ts`, `src/audit-analysis.ts` e `src/audit-cli.ts` implementam a coleta e a análise. Os adaptadores, a CLI e os controles do dashboard foram integrados; `dist` é gerado pelo build. Os testes com transporte Jev local e adaptadores do produto validam a neutralidade das requisições, rejeições, objetos compartilhados, correlação, simulação, revisão, retenção e preferências por agente. O pacote npm contém os novos módulos.
 
 Limite concreto observado: o checkpoint nativo do Codex pode conter `encrypted_content`. Nesse caso, a auditoria registra a fronteira e a entrega HTTP, mas não declara comprovado o conteúdo que o agente consumiu. O Claude possui `$.session.id()` e `session_id`/`transcript_path` no hook instalado; a correlação de aplicação depende de uma entrada posterior observável. Nenhuma coleta pessoal foi ativada, e nenhuma chamada de IA foi feita apenas para validação. Uma compactação real auditada nos dois hosts permanece pendente até ocorrer numa sessão com coleta opt-in.

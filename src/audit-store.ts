@@ -10,11 +10,12 @@ export type AuditMode = 'metadata' | 'evidence';
 export interface AuditConfig {
   schema: 1;
   agents: Partial<Record<AuditAgent, AuditMode>>;
+  modes?: Partial<Record<AuditAgent, AuditMode>>;
   maxBytes: number;
   retentionDays: number;
   captureBytes: number;
 }
-export const defaultAuditConfig = (): AuditConfig => ({ schema: 1, agents: {}, maxBytes: 500 * 1024 ** 2, retentionDays: 30, captureBytes: 8 * 1024 ** 2 });
+export const defaultAuditConfig = (): AuditConfig => ({ schema: 1, agents: {}, modes: {}, maxBytes: 500 * 1024 ** 2, retentionDays: 30, captureBytes: 8 * 1024 ** 2 });
 export const auditRoot = (env: Env) => join(dataDir(env), 'audit');
 export const digest = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
 export const validId = (id: string): boolean => /^[a-zA-Z0-9_-]{1,100}$/.test(id);
@@ -28,7 +29,9 @@ export async function auditConfig(env: Env): Promise<AuditConfig> {
   try {
     const stored = await readJson<AuditConfig>(join(auditRoot(env), 'config.json'));
     if (stored.schema !== 1 || !stored.agents || typeof stored.agents !== 'object') throw Error('invalid audit configuration');
-    for (const mode of Object.values(stored.agents)) if (mode !== 'metadata' && mode !== 'evidence') throw Error('invalid audit mode');
+    for (const section of [stored.agents, stored.modes ?? {}]) for (const [agent, mode] of Object.entries(section)) {
+      if ((agent !== 'codex' && agent !== 'claude') || (mode !== 'metadata' && mode !== 'evidence')) throw Error('invalid audit agent or mode');
+    }
     for (const key of ['maxBytes', 'retentionDays', 'captureBytes'] as const) {
       if (!Number.isSafeInteger(stored[key]) || stored[key] <= 0) throw Error(`invalid audit ${key}`);
     }
@@ -178,10 +181,14 @@ export async function unpackEvidence(env: Env, hash: string, maxBytes = 32 * 102
   return unpack(hash, 0);
 }
 
-export async function configureAudit(env: Env, agent: AuditAgent, mode?: AuditMode): Promise<AuditConfig> {
+export async function configureAudit(env: Env, agent: AuditAgent, mode?: AuditMode, enabled = mode !== undefined): Promise<AuditConfig> {
   return withAuditLock(env, async () => {
     const config = await auditConfig(env);
-    if (mode) config.agents[agent] = mode; else delete config.agents[agent];
+    if (mode) (config.modes ??= {})[agent] = mode;
+    else if (config.agents[agent]) (config.modes ??= {})[agent] = config.agents[agent];
+    const selectedMode = mode ?? config.modes?.[agent] ?? 'evidence';
+    if (enabled) config.agents[agent] = selectedMode;
+    else delete config.agents[agent];
     await atomicJson(join(auditRoot(env), 'config.json'), config);
     return config;
   });

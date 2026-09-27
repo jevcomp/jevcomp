@@ -8,6 +8,7 @@ import { startDashboard } from '../dist/dashboard.js';
 import { userSettings } from '../dist/settings.js';
 import { appendHistory } from '../dist/store.js';
 import { VERSION } from '../dist/version.js';
+import { auditConfig } from '../dist/audit-store.js';
 
 async function dashboard(t, extra = {}) {
   const root = await mkdtemp(join(tmpdir(), 'jevcomp-dash-settings-'));
@@ -35,6 +36,8 @@ test('settings page changes a setting and reports it back', async (t) => {
   assert.equal(userSettings(env, 'codex').pinRecentMessages, 8);
   assert.equal(snapshot.version, VERSION);
   assert.deepEqual(snapshot.agents, { codex: null, claude: null, agy: { installed: false } });
+  assert.deepEqual(snapshot.audit, { supported: true, enabled: false, mode: 'evidence' });
+  assert.match(html, /Auditoria das decisões/);
 });
 
 test('a Claude Code install is reported without Codex', async (t) => {
@@ -80,6 +83,26 @@ test('settings API isolates agent sections and rejects an invalid agent', async 
     method: 'POST', headers: { 'content-type': 'application/json', 'x-jevcomp-token': token }, body: JSON.stringify({ action: 'reset' }),
   });
   assert.equal(invalid.status, 400);
+});
+
+test('dashboard toggles audit per agent and preserves its selected mode while disabled', async (t) => {
+  const { env, url, token } = await dashboard(t);
+  const send = (agent, body) => fetch(`${url}api/settings?agent=${agent}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-jevcomp-token': token }, body: JSON.stringify(body),
+  });
+  let response = await send('codex', { action: 'audit', enabled: true, mode: 'evidence' });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).audit, { supported: true, enabled: true, mode: 'evidence' });
+  response = await send('claude', { action: 'audit', enabled: true, mode: 'metadata' });
+  assert.deepEqual((await response.json()).audit, { supported: true, enabled: true, mode: 'metadata' });
+  response = await send('claude', { action: 'audit', enabled: false, mode: 'metadata' });
+  assert.deepEqual((await response.json()).audit, { supported: true, enabled: false, mode: 'metadata' });
+  const config = await auditConfig(env);
+  assert.equal(config.agents.codex, 'evidence');
+  assert.equal(config.agents.claude, undefined);
+  assert.equal(config.modes.claude, 'metadata');
+  assert.equal((await send('agy', { action: 'audit', enabled: true, mode: 'evidence' })).status, 400);
+  assert.equal((await send('codex', { action: 'audit', enabled: 'yes', mode: 'evidence' })).status, 400);
 });
 
 test('requests addressed to another host name are refused', async (t) => {

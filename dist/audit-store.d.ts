@@ -4,6 +4,7 @@ export type AuditMode = 'metadata' | 'evidence';
 export interface AuditConfig {
     schema: 1;
     agents: Partial<Record<AuditAgent, AuditMode>>;
+    modes?: Partial<Record<AuditAgent, AuditMode>>;
     maxBytes: number;
     retentionDays: number;
     captureBytes: number;
@@ -29,4 +30,4 @@ export declare class EvidenceGraph {
 }
 export declare function persistGraph(env: Env, graph: EvidenceGraph, limit: number): Promise<void>;
 export declare function unpackEvidence(env: Env, hash: string, maxBytes?: number): Promise<unknown>;
-export declare function configureAudit(env: Env, agent: AuditAgent, mode?: AuditMode): Promise<AuditConfig>;
+export declare function configureAudit(env: Env, agent: AuditAgent, mode?: AuditMode, enabled?: boolean): Promise<AuditConfig>;

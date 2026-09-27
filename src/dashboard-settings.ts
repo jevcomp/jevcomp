@@ -9,6 +9,7 @@ import { resetUserSettings, setUserSetting, settingOverride, userSettings, type 
 import { readHistory } from './store.js';
 import { VERSION } from './version.js';
 import { agyCaInstalled, agyCertificateThumbprint } from './agy-proxy.js';
+import { auditConfig, configureAudit, type AuditAgent, type AuditMode } from './audit-store.js';
 
 type Env = Record<string, string | undefined>;
 type Provider = 'openrouter' | 'typesafe';
@@ -26,6 +27,7 @@ export interface SettingsSnapshot {
     agy: { installed: boolean };
   };
   dashboardUrl: string;
+  audit: { supported: boolean; enabled: boolean; mode: AuditMode };
   settings: Array<{ name: SettingName; value: string; choices: string[]; lockedBy?: string }>;
 }
 
@@ -59,6 +61,7 @@ export async function settingsSnapshot(env: Env = process.env, agent: SettingsAg
   const codexInstalled = existsSync(codexMarker);
   const claude = await claudeInstallation(env);
   const agyInstalled = await antigravityInstalled(env);
+  const audit = await auditConfig(env);
   const lastJev = [...history].reverse().find((row) => row.phase === 'precompact' || (!row.phase && row.status === 'failed'));
   const settingValue: Record<SettingName, string> = {
     'pin-recent-messages': String(settings.pinRecentMessages),
@@ -78,6 +81,11 @@ export async function settingsSnapshot(env: Env = process.env, agent: SettingsAg
       agy: { installed: agyInstalled },
     },
     dashboardUrl: `http://127.0.0.1:${dashboardPort(env)}/`,
+    audit: {
+      supported: agent !== 'agy',
+      enabled: agent === 'agy' ? false : !!audit.agents[agent as AuditAgent],
+      mode: agent === 'agy' ? 'evidence' : audit.agents[agent as AuditAgent] ?? audit.modes?.[agent as AuditAgent] ?? 'evidence',
+    },
     settings: SETTINGS_ITEMS.map((item) => ({
       name: item.name,
       value: settingValue[item.name],
@@ -110,6 +118,13 @@ export async function applySettingsChange(body: Record<string, unknown>, env: En
     const key = typeof body.key === 'string' ? body.key.trim() : '';
     if (!key) throw new Error('the key is empty');
     await saveProviderConfiguration(provider(body.provider), key, env);
+  } else if (body.action === 'audit') {
+    if (agent === 'agy') throw new Error('audit is supported for Codex and Claude Code only');
+    if (typeof body.enabled !== 'boolean') throw new Error('enabled must be a boolean');
+    const config = await auditConfig(env);
+    const mode = body.mode ?? config.agents[agent] ?? config.modes?.[agent] ?? 'evidence';
+    if (mode !== 'evidence' && mode !== 'metadata') throw new Error('audit mode must be evidence or metadata');
+    await configureAudit(env, agent as AuditAgent, mode as AuditMode, body.enabled);
   } else {
     throw new Error('unknown action');
   }
