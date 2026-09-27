@@ -7,6 +7,7 @@ import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compactForClaude } from './claude-compact.js';
 import { runCodex } from './codex-proxy.js';
+import { commandExists, runSync } from './command.js';
 import { installAgyCa, runAgy, uninstallAgyCa } from './agy-proxy.js';
 import { compactMessages, reductionRatio } from './compact.js';
 import { startDashboard } from './dashboard.js';
@@ -47,11 +48,6 @@ Dashboard: ${dashboardAddress()} (opens with each Codex or Claude Code session)`
 type Agent = 'codex' | 'claude' | 'agy';
 const AGENT_NAMES: Record<Agent, string> = { codex: 'Codex', claude: 'Claude Code', agy: 'Antigravity' };
 
-function hasCommand(name: string): boolean {
-  try { execFileSync(name, ['--version'], { stdio: 'ignore', timeout: 20_000, windowsHide: true }); return true; }
-  catch { return false; }
-}
-
 function agentArgs(args: readonly string[]): Agent[] | undefined {
   if (args.includes('all') || args.includes('both')) return ['codex', 'claude'];
   const picked = (['codex', 'claude', 'agy'] as const).filter((agent) => args.includes(agent));
@@ -61,9 +57,13 @@ function agentArgs(args: readonly string[]): Agent[] | undefined {
 async function chooseAgents(args: readonly string[]): Promise<Agent[]> {
   const requested = agentArgs(args);
   if (requested) return requested;
-  const found = (['codex', 'claude', 'agy'] as const).filter(hasCommand);
+  const found = (['codex', 'claude', 'agy'] as const).filter(commandExists);
   if (!found.length) throw new Error('none of codex, claude or agy was found; install one of them first');
-  if (found.length === 1 || !interactive()) return found.filter((agent) => agent !== 'agy');
+  const withoutCertificate = found.filter((agent) => agent !== 'agy');
+  if (!interactive() || found.length === 1) {
+    if (!withoutCertificate.length) throw new Error('only Antigravity was found; run `jevcomp install agy` to install its certificate');
+    return withoutCertificate;
+  }
   const names = found.map((agent, index) => `${index + 1}) ${AGENT_NAMES[agent]}`).join('  ');
   const answer = await ask(`Install for: ${names}  ${found.length + 1}) all  (e.g. 1,3) [${found.length + 1}]: `);
   if (!answer || answer === String(found.length + 1)) return [...found];
@@ -74,14 +74,14 @@ async function chooseAgents(args: readonly string[]): Promise<Agent[]> {
 
 function claudePluginInstalled(): boolean {
   try {
-    const plugins = JSON.parse(execFileSync('claude', ['plugin', 'list', '--json'], { encoding: 'utf8', timeout: 30_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }));
+    const plugins = JSON.parse(runSync('claude', ['plugin', 'list', '--json'], { encoding: 'utf8', timeout: 30_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }));
     return Array.isArray(plugins) && plugins.some((plugin) => plugin?.id === 'jevcomp@jevcomp');
   } catch { return false; }
 }
 
 function removeClaudePlugin(): void {
   for (const argv of [['plugin', 'uninstall', 'jevcomp@jevcomp'], ['plugin', 'marketplace', 'remove', 'jevcomp']]) {
-    try { execFileSync('claude', argv, { stdio: 'ignore', timeout: 60_000, windowsHide: true }); } catch {}
+    try { runSync('claude', argv, { stdio: 'ignore', timeout: 60_000, windowsHide: true }); } catch {}
   }
 }
 
@@ -89,8 +89,8 @@ function removeClaudePlugin(): void {
 async function installClaude(): Promise<void> {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   removeClaudePlugin();
-  execFileSync('claude', ['plugin', 'marketplace', 'add', packageRoot], { stdio: 'inherit', windowsHide: true });
-  execFileSync('claude', ['plugin', 'install', 'jevcomp@jevcomp'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
+  runSync('claude', ['plugin', 'marketplace', 'add', packageRoot], { stdio: 'inherit', windowsHide: true });
+  runSync('claude', ['plugin', 'install', 'jevcomp@jevcomp'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
   console.log(await enableFunctionHooks(process.env));
 }
 
@@ -187,7 +187,8 @@ async function install(args: readonly string[]): Promise<void> {
   }
   const runtimeCli = await installRuntime(fileURLToPath(import.meta.url), process.env);
   await installHooks(runtimeCli);
-  console.log('Connected to Codex. Restart Codex, type /hooks and approve the four jevcomp hooks.');
+  console.log('Connected to Codex. Start it with `jevcomp codex` to save tokens; plain `codex` only runs the hooks.');
+  console.log('On the first start, type /hooks and approve the four jevcomp hooks.');
   console.log(`Dashboard: ${dashboardAddress()} (opens with each ${agents.filter((agent) => agent !== 'agy').map((agent) => AGENT_NAMES[agent]).join(' or ')} session)`);
 }
 

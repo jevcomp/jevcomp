@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { launch } from './command.js';
 import { compactMessages, estimateTokens, reductionRatio } from './compact.js';
 import { jevCompactOptions } from './hooks.js';
 import { renderMessages } from './render.js';
@@ -363,11 +364,11 @@ export async function runCodex(args, env = process.env, options = {}) {
         console.error(`jevcomp proxy failed (${error instanceof Error ? error.message : String(error)}); starting plain Codex.`);
     }
     try {
-        const child = (options.spawn ?? spawn)('codex', proxy ? codexArguments(proxy.baseUrl, args) : [...args], {
+        const child = launch('codex', proxy ? codexArguments(proxy.baseUrl, args) : [...args], {
             env,
             stdio: 'inherit',
             windowsHide: true,
-        });
+        }, options.spawn ?? spawn);
         return await childExit(child);
     }
     finally {

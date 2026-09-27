@@ -125,11 +125,20 @@ test('agy forwards arguments, inherited streams, proxy environment and exit stat
   assert.equal(closed, true);
 });
 
-test('agy refuses to proxy until its generated CA is installed', async (t) => {
+test('agy starts without the proxy when its certificate is not installed', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'jev-agy-untrusted-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await assert.rejects(runAgy([], { JEVCOMP_AGY_HOME: root }, {
+  let env;
+  const status = await runAgy(['-p', 'oi'], { JEVCOMP_AGY_HOME: root }, {
     isInstalled: () => false,
-    spawn: () => { throw new Error('agy must not start'); },
-  }), /Antigravity CA is not installed\. Run `jevcomp install agy` first\./);
+    startProxy: () => { throw new Error('proxy must not start'); },
+    spawn: (_command, _args, options) => {
+      env = options.env;
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0, null));
+      return child;
+    },
+  });
+  assert.equal(status, 0);
+  assert.equal(env.HTTPS_PROXY, undefined);
 });

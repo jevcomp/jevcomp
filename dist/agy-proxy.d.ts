@@ -8,7 +8,7 @@ export declare function ensureAgyCertificate(env?: Record<string, string | undef
 export declare function agyCertificateThumbprint(env?: Record<string, string | undefined>): Promise<string | undefined>;
 export declare function agyCaInstalled(thumbprint: string): boolean;
 export declare function installAgyCa(env?: Record<string, string | undefined>): Promise<void>;
-export declare function uninstallAgyCa(env?: Record<string, string | undefined>): Promise<void>;
+export declare function uninstallAgyCa(): Promise<void>;
 export declare function startAgyProxy(env?: Record<string, string | undefined>, options?: {
     tunnelHost?: string;
     tunnelPort?: number;

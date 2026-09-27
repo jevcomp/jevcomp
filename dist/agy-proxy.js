@@ -6,7 +6,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { captureDirectory } from './store.js';
+import { launch } from './command.js';
 import { randomUUID } from 'node:crypto';
+const CA_NAME = 'jevcomp Antigravity local CA';
 export const AGY_HOSTS = ['cloudcode-pa.googleapis.com', 'daily-cloudcode-pa.googleapis.com'];
 const allowed = new Set(AGY_HOSTS);
 export const isAgyInterceptHost = (hostname) => allowed.has(hostname.toLowerCase());
@@ -31,7 +33,7 @@ export async function ensureAgyCertificate(env = process.env) {
         await Promise.all([readFile(caKey), readFile(caCert), readFile(serverKey), readFile(serverCert)]);
     }
     catch {
-        openssl(['req', '-x509', '-newkey', 'rsa:3072', '-sha256', '-days', '3650', '-nodes', '-keyout', caKey, '-out', caCert, '-subj', '/CN=jevcomp Antigravity local CA'], env);
+        openssl(['req', '-x509', '-newkey', 'rsa:3072', '-sha256', '-days', '3650', '-nodes', '-keyout', caKey, '-out', caCert, '-subj', `/CN=${CA_NAME}`], env);
         openssl(['req', '-newkey', 'rsa:2048', '-sha256', '-nodes', '-keyout', serverKey, '-out', join(directory, 'server.csr'), '-subj', '/CN=cloudcode-pa.googleapis.com'], env);
         await writeFile(join(directory, 'server.ext'), `subjectAltName=DNS:${AGY_HOSTS.join(',DNS:')}\nextendedKeyUsage=serverAuth\n`);
         openssl(['x509', '-req', '-in', join(directory, 'server.csr'), '-CA', caCert, '-CAkey', caKey, '-CAcreateserial', '-out', serverCert, '-days', '825', '-sha256', '-extfile', join(directory, 'server.ext')], env);
@@ -65,11 +67,16 @@ export async function installAgyCa(env = process.env) {
     const { directory } = await ensureAgyCertificate(env);
     execFileSync('certutil.exe', ['-user', '-addstore', 'Root', join(directory, 'ca.cer')], { stdio: 'ignore', windowsHide: false });
 }
-export async function uninstallAgyCa(env = process.env) {
-    const thumbprint = await agyCertificateThumbprint(env);
-    if (!thumbprint)
+export async function uninstallAgyCa() {
+    if (process.platform !== 'win32')
         return;
-    execFileSync('certutil.exe', ['-user', '-delstore', 'Root', thumbprint], { stdio: 'ignore', windowsHide: false });
+    try {
+        execFileSync('certutil.exe', ['-user', '-store', 'Root', CA_NAME], { stdio: 'ignore', windowsHide: true });
+    }
+    catch {
+        return;
+    }
+    execFileSync('certutil.exe', ['-user', '-delstore', 'Root', CA_NAME], { stdio: 'ignore', windowsHide: false });
 }
 export async function startAgyProxy(env = process.env, options = {}) {
     const { directory } = await ensureAgyCertificate(env);
@@ -162,18 +169,15 @@ export async function runAgy(args, env = process.env, options = {}) {
     try {
         const certificate = await ensureAgyCertificate(env);
         if (!(options.isInstalled ?? agyCaInstalled)(certificate.thumbprint))
-            throw new Error('Antigravity CA is not installed. Run `jevcomp install agy` first.');
+            throw new Error('the jevcomp certificate is not installed; run `jevcomp install agy`');
         proxy = await (options.startProxy ?? startAgyProxy)(env);
     }
     catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
-        if (/CA is not installed/.test(String(error)))
-            throw error;
-        console.error('jevcomp Antigravity proxy failed; starting agy without the local proxy.');
+        console.error(`jevcomp Antigravity proxy is off (${error instanceof Error ? error.message : String(error)}); starting plain agy.`);
     }
     const childEnv = proxy ? { ...env, HTTPS_PROXY: proxy.url, https_proxy: proxy.url } : env;
     try {
-        const child = (options.spawn ?? spawn)('agy', args, { env: childEnv, stdio: 'inherit', windowsHide: true });
+        const child = launch('agy', args, { env: childEnv, stdio: 'inherit', windowsHide: true }, options.spawn ?? spawn);
         return await new Promise((resolve, reject) => {
             child.once('error', reject);
             child.once('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
