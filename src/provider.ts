@@ -8,6 +8,7 @@ export type JevProvider = 'auto' | 'typesafe' | 'openrouter';
 export type Env = Record<string, string | undefined>;
 
 export interface JevClientOptions {
+  auditObserver?: (event: string, value: unknown) => void;
   provider?: JevProvider;
   apiKey?: string;
   model?: string;
@@ -221,11 +222,13 @@ export class JevClient implements JevAsker {
       try {
         response = await fetcher(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeout) });
       } catch (error) {
+        try { this.options.auditObserver?.('attempt', { attempt, failed: true }); } catch {}
         if (attempt >= retries) throw error;
         await sleep(Math.min(2_000, 200 * 2 ** attempt));
         continue;
       }
       const text = await response.text();
+      try { this.options.auditObserver?.('attempt', { attempt, status: response.status }); } catch {}
       if (response.ok || attempt >= retries || !retryable(response.status)) return parseResponse(response.status, response.ok, text);
       await sleep(Math.min(2_000, headerDelay(response) ?? 200 * 2 ** attempt));
     }

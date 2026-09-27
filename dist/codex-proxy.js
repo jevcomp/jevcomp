@@ -1,3 +1,4 @@
+import { beginAudit, auditEvent } from './audit.js';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -216,41 +217,46 @@ async function localCompaction(body, env) {
     const messages = [];
     for (const item of items.slice(0, -1))
         appendResponseItem(messages, item);
-    if (messages.length < 2)
-        return undefined;
-    const jev = jevCompactOptions(env);
-    const result = await compactMessages(messages, jev);
-    if (reductionRatio(result) < userSettings(env, 'codex').minReductionRatio)
-        return undefined;
-    const summary = renderMessages(result.messages.filter((message) => message.role !== 'developer' && message.role !== 'system'));
-    const outputTokens = estimateTokens(summary);
-    if (!summary.trim() || outputTokens > MAX_COMPACTION_SUMMARY_TOKENS)
-        return undefined;
-    const sse = compactSse(summary, outputTokens, typeof payload.model === 'string' ? payload.model : undefined);
     const runId = randomUUID();
-    const metadataValue = payload.client_metadata;
-    const metadata = record(metadataValue) ? metadataValue : {};
+    const metadata = record(payload.client_metadata) ? payload.client_metadata : {};
+    const sessionId = metadataString(metadata, 'session_id') ?? metadataString(metadata, 'thread_id');
+    const jev = jevCompactOptions(env, 'codex');
+    const minimum = userSettings(env, 'codex').minReductionRatio;
+    const audit = await beginAudit(env, 'codex', runId, messages, { minReductionRatio: minimum, provider: jev.provider, model: jev.model, maxSummaryTokens: MAX_COMPACTION_SUMMARY_TOKENS }, sessionId);
     const localRun = {
-        at: new Date().toISOString(),
-        runId,
-        sessionId: metadataString(metadata, 'session_id') ?? metadataString(metadata, 'thread_id') ?? runId,
-        turnId: metadataString(metadata, 'turn_id'),
-        model: typeof payload.model === 'string' ? payload.model : undefined,
-        provider: jev.provider,
-        host: 'codex',
-        phase: 'precompact',
-        status: 'prepared',
-        stats: result.stats,
-        decisions: result.decisions,
-        retainedChars: summary.length,
-        detail: 'Responses API compaction answered locally by Jev',
+        at: new Date().toISOString(), runId, ...(audit ? { auditId: runId } : {}), sessionId: sessionId ?? runId,
+        turnId: metadataString(metadata, 'turn_id'), model: typeof payload.model === 'string' ? payload.model : undefined,
+        provider: jev.provider, host: 'codex', phase: 'precompact',
     };
-    await tryAppendHistory(localRun, env);
-    await tryAppendHistory({ ...localRun, phase: 'postcompact', status: 'restored', injectedChars: 0, injectedPayloadChars: 0 }, env);
-    return sse;
+    try {
+        if (messages.length < 2) {
+            const recorded = await tryAppendHistory({ ...localRun, status: 'skipped', detail: 'conversation too short' }, env);
+            await audit?.finish('rejected', 'conversation_too_short', recorded);
+            return undefined;
+        }
+        const result = await compactMessages(messages, { ...jev, auditObserver: audit?.observe });
+        const summary = renderMessages(result.messages.filter(message => message.role !== 'developer' && message.role !== 'system'));
+        const outputTokens = estimateTokens(summary);
+        const rejection = reductionRatio(result) < minimum ? 'below_minimum' : !summary.trim() ? 'empty_output' : outputTokens > MAX_COMPACTION_SUMMARY_TOKENS ? 'output_too_large' : undefined;
+        const recorded = await tryAppendHistory({ ...localRun, status: rejection ? 'skipped' : 'prepared', stats: result.stats, decisions: result.decisions, retainedChars: summary.length, detail: rejection ?? 'Responses API compaction answered locally by Jev' }, env);
+        if (rejection) {
+            await audit?.finish('rejected', rejection, recorded);
+            return undefined;
+        }
+        const sse = compactSse(summary, outputTokens, typeof payload.model === 'string' ? payload.model : undefined);
+        await tryAppendHistory({ ...localRun, phase: 'postcompact', status: 'restored', stats: result.stats, retainedChars: summary.length, injectedChars: 0, injectedPayloadChars: 0 }, env);
+        await audit?.finish('result_produced', 'response_prepared', recorded, summary);
+        return { body: sse, auditId: audit?.manifest.id };
+    }
+    catch (error) {
+        const recorded = await tryAppendHistory({ ...localRun, status: 'failed', detail: error instanceof Error ? error.message : String(error) }, env);
+        await audit?.finish('failed', 'compaction_failed', recorded);
+        throw error;
+    }
 }
 export async function startCodexProxy(env = process.env, upstreams = destinations) {
     const fallbackRoute = await authRoute(env);
+    const pendingAuditEvents = new Set();
     const server = createServer((request, response) => {
         void (async () => {
             const body = await requestBody(request);
@@ -271,7 +277,14 @@ export async function startCodexProxy(env = process.env, upstreams = destination
                         'cache-control': 'no-cache, no-transform',
                         connection: 'keep-alive',
                     });
-                    response.end(localResponse);
+                    const auditId = localResponse.auditId;
+                    if (auditId)
+                        response.once('finish', () => {
+                            const pending = auditEvent(env, auditId, 'transport_finished', 'HTTP response finish; consumption unconfirmed');
+                            pendingAuditEvents.add(pending);
+                            void pending.finally(() => pendingAuditEvents.delete(pending));
+                        });
+                    response.end(localResponse.body);
                     return;
                 }
             }
@@ -311,10 +324,13 @@ export async function startCodexProxy(env = process.env, upstreams = destination
         throw new Error('Could not determine proxy address');
     return {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        close: () => new Promise((resolve, reject) => {
-            server.close((error) => error ? reject(error) : resolve());
-            server.closeAllConnections?.();
-        }),
+        close: async () => {
+            await new Promise((resolve, reject) => {
+                server.close((error) => error ? reject(error) : resolve());
+                server.closeAllConnections?.();
+            });
+            await Promise.allSettled([...pendingAuditEvents]);
+        },
     };
 }
 export function codexArguments(baseUrl, args) {

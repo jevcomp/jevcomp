@@ -17,6 +17,7 @@ interface RunSummary {
     provider?: string;
     host: 'codex' | 'claude' | 'agy';
     status: 'prepared' | 'ready' | 'restored' | 'nothing_missing' | 'skipped' | 'too_short' | 'failed' | 'restore_failed';
+    directCompaction: boolean;
     reductionRatio: number;
     charsBefore: number;
     charsAfter: number;
@@ -42,6 +43,8 @@ interface LastCompaction {
     status: RunSummary['status'];
     charsBefore: number;
     injectedPayloadChars: number;
+    returnedChars: number;
+    directCompaction: boolean;
     blocks: {
         tool: string;
         label: string;
@@ -73,6 +76,8 @@ export declare function stats(env?: Record<string, string | undefined>, agent?: 
     retainedArchiveChars: number;
     injectedChars: number;
     injectedPayloadChars: number;
+    directCompactions: number;
+    deliveredChars: number;
     restoreEligibleChars: number;
     restoreCharsNotInjected: number;
     jevInputTokens: number;

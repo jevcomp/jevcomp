@@ -9,6 +9,10 @@ import { join } from 'node:path';
 import { applyJevCut, toJevMessages } from '../dist/claude.js';
 import { stats } from '../dist/dashboard.js';
 import { handleHook } from '../dist/hooks.js';
+import { setUserSetting } from '../dist/settings.js';
+import { configureAudit, auditRoot, digest } from '../dist/audit-store.js';
+import { auditManifests } from '../dist/audit.js';
+import { register as registerPlugin } from '../hooks/claude.js';
 
 const use = (id, text) => ({ tool_use_id: id, tool: 'Read', input: { file_path: id }, text });
 const result = (id, text) => ({ tool_use_id: id, text, isError: false });
@@ -18,6 +22,22 @@ const transcript = () => [
   { role: 'user', text: '', toolUses: [], toolResults: [result('a', 'x'.repeat(4000)), result('b', 'y'.repeat(4000))], handle: 'h2' },
   { role: 'assistant', text: 'Found it.', toolUses: [], handle: 'h3' },
 ];
+
+test('Claude function hook passes the native session identity without adding model calls', async () => {
+  let callback;
+  registerPlugin((event, handler) => { if (event === 'session.compact') callback = handler; }, { provider: 'typesafe', apiKey: 'test' });
+  let sent;
+  const context = {
+    session: { id: async () => 'native-session-id' },
+    process: { run: async (_args, options) => { sent = JSON.parse(options.stdin); return { exitCode: 0, stdout: JSON.stringify({ apply: false, reason: 'below minimum' }) }; } },
+    ui: { log: () => {} },
+  };
+  const event = { trigger: 'auto', messages: transcript() };
+  const native = { messages: event.messages };
+  assert.equal(await callback(context, event, async () => native), native);
+  assert.equal(sent.sessionId, 'native-session-id');
+  assert.deepEqual(sent.messages, toJevMessages(event.messages));
+});
 
 test('a Jev cut keeps untouched Claude messages as the engine gave them and rebuilds edited ones', () => {
   const messages = transcript();
@@ -43,8 +63,15 @@ test('the claude-compact command runs Jev on a Claude transcript and records it 
   const root = await mkdtemp(join(tmpdir(), 'jev-claude-'));
   const env = {
     ...process.env, JEVCOMP_DATA_DIR: join(root, 'data'), JEVCOMP_CONFIG_DIR: join(root, 'config'), JEVCOMP_PROVIDER: 'typesafe', TYPESAFE_API_KEY: 'test',
-    JEV_BASE_URL: `http://127.0.0.1:${jev.address().port}`, JEVCOMP_PIN_RECENT_MESSAGES: '0', JEVCOMP_MIN_REDUCTION_RATIO: '0', JEVCOMP_RETRIES: '0',
+    JEV_BASE_URL: `http://127.0.0.1:${jev.address().port}`, JEVCOMP_RETRIES: '0',
   };
+  for (const name of ['JEVCOMP_PIN_RECENT_MESSAGES', 'JEVCOMP_PRESERVE_RECENT', 'JEVCOMP_LOSS_THRESHOLD', 'JEVCOMP_KEEP_THRESHOLD', 'JEVCOMP_MIN_REDUCTION_RATIO', 'JEVCOMP_MIN_REDUCTION', 'JEVCOMP_SETTINGS_FILE']) delete env[name];
+  await setUserSetting('pin-recent-messages', '12', env, 'codex');
+  await setUserSetting('loss-threshold', '0', env, 'codex');
+  await setUserSetting('pin-recent-messages', '0', env, 'claude');
+  await setUserSetting('loss-threshold', '0.5', env, 'claude');
+  await setUserSetting('min-reduction-ratio', '0', env, 'claude');
+  await configureAudit(env, 'claude', 'evidence');
   const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
   const child = spawn(process.execPath, [cli, 'claude-compact'], { env });
   child.stdin.end(JSON.stringify({ messages: toJevMessages(transcript()) }));
@@ -59,6 +86,13 @@ test('the claude-compact command runs Jev on a Claude transcript and records it 
   assert.equal(s.runs[0].host, 'claude');
   assert.equal(s.runs[0].status, 'restored');
   assert.equal(s.lastCompaction.host, 'claude');
+  const audited = await auditManifests(env);
+  assert.equal(audited.manifests.length, 1);
+  assert.equal(audited.manifests[0].stage, 'result_produced');
+  assert.ok(audited.manifests[0].references.input);
+  assert.equal(audited.manifests[0].sessionSource, 'unknown');
+  assert.deepEqual((await stats(env, 'claude')).settings, { pinRecentMessages: 0, lossThreshold: 0.5, minReductionRatio: 0 });
+  assert.equal((await stats(env, 'codex')).settings.pinRecentMessages, 12);
 });
 
 test('in Claude Code the command hook only starts the dashboard and never runs the Codex flow', async () => {
@@ -66,6 +100,16 @@ test('in Claude Code the command hook only starts the dashboard and never runs t
   const env = { JEVCOMP_DATA_DIR: join(root, 'data'), CLAUDE_PLUGIN_ROOT: root, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', TYPESAFE_API_KEY: 'test', JEVCOMP_PROVIDER: 'typesafe' };
   const pre = await handleHook({ session_id: 's', hook_event_name: 'PreCompact', transcript_path: join(root, 'missing.jsonl') }, env);
   assert.deepEqual(pre, { continue: true, suppressOutput: true });
+});
+
+test('Claude startup hook binds the native transcript only when audit is enabled', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-claude-audit-source-'));
+  const env = { JEVCOMP_DATA_DIR: join(root, 'data'), CLAUDE_PLUGIN_ROOT: root, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', TYPESAFE_API_KEY: 'test', JEVCOMP_PROVIDER: 'typesafe' };
+  await configureAudit(env, 'claude', 'metadata');
+  const path = join(root, 'session-one.jsonl');
+  await handleHook({ session_id: 'session-one', transcript_path: path, hook_event_name: 'SessionStart', source: 'startup' }, env);
+  const binding = JSON.parse(await readFile(join(auditRoot(env), 'sources', `${digest('claude:session-one:')}.json`), 'utf8'));
+  assert.equal(binding.path, path);
 });
 
 test('the first Claude Code session turns function hooks on in the user settings and keeps the rest', async () => {

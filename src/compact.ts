@@ -1,7 +1,10 @@
 import { JevClient, noul, type JevClientOptions } from './provider.js';
 import type { CallDecision, CompactResult, JevAsker, JevQuestions, JevState, Message, ToolResult } from './types.js';
+import { observeAudit, type AuditObserver } from './audit.js';
+import { digest } from './audit-store.js';
 
 export interface CompactOptions {
+  auditObserver?: AuditObserver;
   goal?: string;
   /** Preferred name: maximum accepted loss risk for a destructive action. */
   lossThreshold?: number;
@@ -272,7 +275,7 @@ interface BatchResult {
   usageReportedRequests: number;
 }
 
-async function askBatches(groups: QuestionBatch[], state: JevState, asker: JevAsker, concurrency: number): Promise<BatchResult> {
+async function askBatches(groups: QuestionBatch[], state: JevState, asker: JevAsker, concurrency: number, observer?: AuditObserver): Promise<BatchResult> {
   const answers = new Map<string, { dropLoss: number; truncateLoss: number }>();
   let inputTokens = 0;
   let outputTokens = 0;
@@ -281,7 +284,9 @@ async function askBatches(groups: QuestionBatch[], state: JevState, asker: JevAs
   async function worker(): Promise<void> {
     while (next < groups.length) {
       const group = groups[next++]!;
+      observeAudit(observer, 'questions', group.questions);
       const res = await asker.ask(state, group.questions);
+      if (observer) observeAudit(observer, 'response', { questionsHash: digest(JSON.stringify(group.questions)), response: res });
       const hasInputUsage = Number.isInteger(res.usage?.input_tokens) && res.usage!.input_tokens! >= 0;
       const hasOutputUsage = Number.isInteger(res.usage?.output_tokens) && res.usage!.output_tokens! >= 0;
       if (hasInputUsage || hasOutputUsage) usageReportedRequests++;
@@ -352,10 +357,12 @@ export function reductionRatio(r: Pick<CompactResult, 'stats'>): number { return
 
 export async function compact(messages: readonly Message[], asker: JevAsker, input: CompactOptions = {}): Promise<CompactResult> {
   const started = Date.now(); const o = options(input); const calls = collect(messages, o.preserveRecentMessages); const candidates = calls.filter((c) => !c.pinned);
+  observeAudit(input.auditObserver, 'settings', o);
   const fitted = candidates.length ? fitState(messages, calls, o) : { state: {}, tokens: 0, stage: '' };
+  observeAudit(input.auditObserver, 'state', fitted.state);
   const groups = candidates.length ? batches(candidates, fitted.tokens, o.maxRequestTokens, o.truncateHeadChars) : [];
   const judged = candidates.length
-    ? await askBatches(groups, fitted.state, asker, o.maxConcurrentRequests)
+    ? await askBatches(groups, fitted.state, asker, o.maxConcurrentRequests, input.auditObserver)
     : { answers: new Map<string, { dropLoss: number; truncateLoss: number }>(), inputTokens: 0, outputTokens: 0, usageReportedRequests: 0 };
   const decisions = calls.map((c): CallDecision => {
     const a = judged.answers.get(c.id) ?? { dropLoss: 1, truncateLoss: 1 };
@@ -371,6 +378,7 @@ export async function compact(messages: readonly Message[], asker: JevAsker, inp
     return { id: c.id, callId: c.callId, name: c.name, inputPreview: c.inputPreview, dropLoss: a.dropLoss, truncateLoss: a.truncateLoss, action, resultChars: c.resultChars, originalChars: original, savedChars: saved, pinned: c.pinned };
   });
   const out = apply(messages, decisions, o.truncateHeadChars);
+  observeAudit(input.auditObserver, 'output', out);
   const before = messages.reduce((n, m) => n + chars(m), 0);
   const after = out.reduce((n, m) => n + chars(m), 0);
   return { messages: out, decisions, stats: { messagesBefore: messages.length, messagesAfter: out.length, charsBefore: before, charsAfter: after, calls: calls.length, kept: decisions.filter((d) => d.action === 'keep' && !d.pinned).length, resultsTruncated: decisions.filter((d) => d.action === 'truncate_result').length, callsDropped: decisions.filter((d) => d.action === 'drop_call').length, pinned: decisions.filter((d) => d.pinned).length, stateTokens: fitted.tokens, stateStage: fitted.stage, requests: groups.length, jevInputTokens: judged.inputTokens, jevOutputTokens: judged.outputTokens, jevUsageReportedRequests: judged.usageReportedRequests, ms: Date.now() - started } };

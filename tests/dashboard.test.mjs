@@ -18,6 +18,27 @@ const decisions = [
   { id: 't3', callId: 'c3', name: 'test', inputPreview: '', dropLoss: 0.9, truncateLoss: 0.9, action: 'keep', resultChars: 1000, originalChars: 1010, savedChars: 0, pinned: false },
 ];
 
+test('Codex proxy compaction displays returned text even without a legacy injection', async () => {
+  const env = { JEVCOMP_DATA_DIR: await mkdtemp(join(tmpdir(), 'jev-dashboard-proxy-')) };
+  const row = { at: '2026-09-26T12:00:00Z', runId: 'proxy', sessionId: 'proxy', host: 'codex', stats: compactStats, retainedChars: 3900, decisions };
+  await appendHistory({ ...row, phase: 'precompact', status: 'prepared' }, env);
+  await appendHistory({ ...row, phase: 'postcompact', status: 'restored', injectedPayloadChars: 0, injectedChars: 0 }, env);
+  const summary = await stats(env, 'codex');
+  assert.equal(summary.runs[0].status, 'restored');
+  assert.equal(summary.runs[0].directCompaction, true);
+  assert.equal(summary.lastCompaction.status, 'restored');
+  assert.equal(summary.lastCompaction.directCompaction, true);
+  assert.equal(summary.lastCompaction.returnedChars, 3900);
+  assert.equal(summary.lastCompaction.charsBefore, 10000);
+  assert.equal(summary.injectedPayloadChars, 0);
+  assert.equal(summary.directCompactions, 1);
+  assert.equal(summary.deliveredChars, 3900);
+  await appendHistory({ ...row, runId: 'legacy', phase: 'restore', status: 'restored', injectedPayloadChars: 800 }, env);
+  const mixed = await stats(env, 'codex');
+  assert.equal(mixed.directCompactions, 1);
+  assert.equal(mixed.deliveredChars, 4700);
+});
+
 test('dashboard reports measured impact without invented token-savings estimates', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'jev-dashboard-'));
   const env = { JEVCOMP_DATA_DIR: root, JEVCOMP_CONFIG_DIR: join(root, 'config') };
@@ -35,6 +56,8 @@ test('dashboard reports measured impact without invented token-savings estimates
   assert.equal(s.completedReductionRatio, 0.6);
   assert.equal(s.injectedChars, 2100);
   assert.equal(s.injectedPayloadChars, 1800);
+  assert.equal(s.directCompactions, 0);
+  assert.equal(s.deliveredChars, 1800);
   // The skipped run still consumed Jev usage, so provider cost is counted twice here.
   assert.equal(s.jevInputTokens, 3600);
   assert.equal(s.jevOutputTokens, 120);

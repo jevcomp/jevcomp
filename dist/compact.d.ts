@@ -1,6 +1,8 @@
 import { type JevClientOptions } from './provider.js';
 import type { CompactResult, JevAsker, Message } from './types.js';
+import { type AuditObserver } from './audit.js';
 export interface CompactOptions {
+    auditObserver?: AuditObserver;
     goal?: string;
     /** Preferred name: maximum accepted loss risk for a destructive action. */
     lossThreshold?: number;

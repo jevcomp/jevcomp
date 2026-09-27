@@ -1,5 +1,6 @@
 import type { CallDecision, CompactStats } from './types.js';
 export interface HistoryRow {
+    auditId?: string;
     at: string;
     runId?: string;
     sessionId: string;

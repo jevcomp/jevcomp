@@ -7,7 +7,9 @@ function cliPath() {
 }
 
 async function askJev($, e, options) {
-  const input = JSON.stringify({ trigger: e.trigger, provider: options.provider, apiKey: options.apiKey, messages: toJevMessages(e.messages) });
+  let sessionId;
+  try { sessionId = await $.session.id(); } catch {}
+  const input = JSON.stringify({ sessionId, agentId: e.agentId, trigger: e.trigger, provider: options.provider, apiKey: options.apiKey, messages: toJevMessages(e.messages) });
   const run = await $.process.run(['node', cliPath(), 'claude-compact'], { stdin: input, timeoutMs: 300_000 });
   if (run.exitCode !== 0) throw new Error(String(run.stderr).trim() || `jevcomp exited with ${run.exitCode}`);
   return JSON.parse(String(run.stdout));

@@ -22,6 +22,7 @@ import { configDir, hasSavedProviderKey, providerConfig, resolveApiKey, resolveP
 import { renderMessages } from './render.js';
 import { loadCodexRollout } from './rollout.js';
 import { dataDir } from './store.js';
+import { auditCommand } from './audit-cli.js';
 
 async function stdin(): Promise<string> { let s = ''; for await (const chunk of process.stdin) s += chunk; return s; }
 function flag(args: string[], name: string): string | undefined { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; }
@@ -42,6 +43,7 @@ function help(): void {
   ${' '.repeat(command.length)}              Only one of them: uninstall codex, uninstall claude, uninstall agy
   ${command} codex [args]  Run Codex through the local proxy; compaction is answered by Jev
   ${command} agy [args]   Run Antigravity through the local proxy
+  ${command} audit        Configure and inspect local decision evidence
 
 Dashboard: ${dashboardAddress()} (opens with each Codex or Claude Code session)`);
 }
@@ -232,6 +234,7 @@ async function main(): Promise<void> {
   migrateLegacyConfig(process.env);
   const [cmd, ...args] = process.argv.slice(2);
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') return help();
+  if (cmd === 'audit') return auditCommand(args, process.env);
   if (cmd === 'hook') { const out = await handleHook(JSON.parse(await stdin()), process.env, { startDashboard: true }); process.stdout.write(`${JSON.stringify(out)}\n`); return; }
 
   if (cmd === 'settings') {

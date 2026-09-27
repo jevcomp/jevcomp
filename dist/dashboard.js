@@ -42,6 +42,9 @@ function ratio(removed, before) {
 function runKey(row) {
     return row.runId ?? `${row.sessionId}:${row.turnId ?? ''}:${row.at}`;
 }
+function isDirectCompaction(row) {
+    return row?.host === 'codex' && row.phase === 'postcompact' && row.status === 'restored';
+}
 /** Build only measured statistics. No chars/4 or claimed Codex billing-token savings. */
 export async function stats(env = process.env, agent) {
     const rows = (await readHistory(env)).filter((row) => !agent || (row.host ?? 'codex') === agent);
@@ -62,6 +65,8 @@ export async function stats(env = process.env, agent) {
     const retainedArchiveChars = prepared.reduce((n, r) => n + positive(r.retainedChars ?? r.stats?.charsAfter), 0);
     const injectedChars = restored.reduce((n, r) => n + positive(r.injectedChars), 0);
     const injectedPayloadChars = restored.reduce((n, r) => n + positive(r.injectedPayloadChars), 0);
+    const directCompactions = restored.filter(isDirectCompaction).length;
+    const deliveredChars = restored.reduce((n, row) => n + positive(isDirectCompaction(row) ? row.retainedChars : row.injectedPayloadChars), 0);
     const restoreEligibleChars = restored.reduce((n, r) => n + positive(r.retainedChars), 0);
     const restoreCharsNotInjected = Math.max(0, restoreEligibleChars - injectedPayloadChars);
     // A skip happens after Jev has already judged the transcript, so its provider
@@ -141,8 +146,9 @@ export async function stats(env = process.env, agent) {
             model: row.model,
             provider: row.provider,
             host: row.host ?? 'codex',
+            directCompaction: isDirectCompaction(restore),
             status: row.status === 'prepared'
-                ? restore ? (positive(restore.injectedPayloadChars) > 0 ? 'restored' : 'nothing_missing') : restoreFailure ? 'restore_failed' : readyRow ? 'ready' : 'prepared'
+                ? restore ? (isDirectCompaction(restore) || positive(restore.injectedPayloadChars) > 0 ? 'restored' : 'nothing_missing') : restoreFailure ? 'restore_failed' : readyRow ? 'ready' : 'prepared'
                 : row.status === 'skipped' && !row.stats ? 'too_short' : row.status,
             reductionRatio: ratio(Math.max(0, before - after), before),
             charsBefore: before,
@@ -175,6 +181,8 @@ export async function stats(env = process.env, agent) {
         status: runs.find((run) => run.runId === runKey(latest))?.status ?? 'prepared',
         charsBefore: positive(latest.stats?.charsBefore),
         injectedPayloadChars: positive(restoresByRun.get(runKey(latest))?.injectedPayloadChars),
+        returnedChars: positive(restoresByRun.get(runKey(latest))?.retainedChars),
+        directCompaction: isDirectCompaction(restoresByRun.get(runKey(latest))),
         blocks: (latest.decisions ?? []).map((decision) => ({
             tool: decision.name,
             label: commandLabel(decision.name, decision.inputPreview),
@@ -204,6 +212,8 @@ export async function stats(env = process.env, agent) {
         retainedArchiveChars,
         injectedChars,
         injectedPayloadChars,
+        directCompactions,
+        deliveredChars,
         restoreEligibleChars,
         restoreCharsNotInjected,
         jevInputTokens,
@@ -213,7 +223,7 @@ export async function stats(env = process.env, agent) {
         jevUsageCoverage: jevRequests ? jevUsageReportedRequests / jevRequests : 0,
         evaluatedSelections: scored.length,
         averageSelectionMs: scored.length ? Math.round(selectionMs / scored.length) : 0,
-        settings: userSettings(env, 'codex'),
+        settings: userSettings(env, agent ?? 'codex'),
         byTool: [...byTool.values()].sort((a, b) => b.removedChars - a.removedChars),
         recentDecisions,
         runs: runs.slice(0, 100),
@@ -351,7 +361,7 @@ table.rb th,table.rb td{white-space:nowrap}table.rb .rb-grow{width:100%}
    <div class="card"><h2>Compactações recentes</h2><div class="table" style="margin-top:12px"><table class="rb"><thead><tr><th>Quando</th><th>Resultado</th><th class="rb-grow">Texto antes → depois do corte</th><th class="right">Antes</th><th class="right">Depois</th><th class="right">Redução</th></tr></thead><tbody id="runs"></tbody></table></div></div>
    <div class="card">
     <div class="decisions-head"><h2>Decisões recentes</h2>
-     <div class="seg filters" role="group" aria-label="Filtrar decisões"><button type="button" data-filter="all" aria-pressed="true">Todas</button><button type="button" data-filter="k" aria-pressed="false">Inteiros</button><button type="button" data-filter="s" aria-pressed="false">Resumidos</button><button type="button" data-filter="r" aria-pressed="false">Removidos</button></div></div>
+     <div class="seg filters" role="group" aria-label="Filtrar decisões"><button type="button" data-filter="all" aria-pressed="true">Todas</button><button type="button" data-filter="k" aria-pressed="false">Inteiros</button><button type="button" data-filter="s" aria-pressed="false">Encurtados</button><button type="button" data-filter="r" aria-pressed="false">Removidos</button></div></div>
     <div class="table" style="margin-top:12px"><table><thead><tr><th>Quando</th><th>Comando</th><th>Decisão</th><th>Risco se descartar</th><th class="right">Saída</th><th class="right">Cortado</th></tr></thead><tbody id="decisions"></tbody></table></div>
    </div>
   </section>
@@ -390,14 +400,14 @@ const plural=(n,one,many)=>f(n)+' '+(n===1?one:many);
 let toastTimer;
 function toast(text,bad){const el=$('#toast');el.textContent=text;el.className='toast'+(bad?' bad':'');el.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{el.hidden=true},2200)}
 
-const DECISION={k:['ok','Inteiro'],s:['short','Resumido'],r:['drop','Removido'],p:['pin','Recente']};
+const DECISION={k:['ok','Inteiro'],s:['short','Encurtado'],r:['drop','Removido'],p:['pin','Recente']};
 const STATUS={restored:['ok','Enviado ao Codex','O Codex recebeu o que o resumo perdeu.'],nothing_missing:['skip','Não enviado: resumo já completo','O resumo do Codex já tinha tudo o que o Jev guardou; não havia o que enviar.'],skipped:['skip','Não enviado: pouco a cortar','Quase tudo ainda era útil: o corte ficaria abaixo do mínimo escolhido em Configurações.'],too_short:['skip','Não enviado: pouco a cortar','A conversa tinha menos de duas mensagens; não havia o que cortar.'],failed:['fail','Não enviado: erro','O jevcomp teve um erro antes da compactação e o Codex fez o resumo normal.'],restore_failed:['fail','Falha ao enviar','O jevcomp não conseguiu ler o que tinha guardado.'],ready:['wait','Aguardando envio','Vai junto do próximo prompt ou do início da próxima sessão.'],prepared:['wait','Aguardando a compactação','O Jev já escolheu; o Codex ainda está resumindo.']};
 const HOST={codex:'Codex',claude:'Claude Code',agy:'Antigravity'};
 const agentList=s=>[...new Set((s.runs||[]).map(r=>'o '+(HOST[r.host]||'Codex')))];
 const agents=s=>agentList(s).join(' e ')||'o Codex';
 const agentVerb=(s,one,many)=>agentList(s).length>1?many:one;
 const CLAUDE_STATUS={restored:['ok','Cortado pelo Jev','O Claude Code ficou com a conversa cortada pelo Jev no lugar do resumo.']};
-const statusPill=r=>{const claude=r.host==='claude';const[cls,label,help]=((claude&&CLAUDE_STATUS[r.status])||STATUS[r.status]||STATUS.prepared).map(t=>{t=t.replace('Codex',HOST[r.host]||'Codex');return claude?t.replace('Não enviado','Sem corte'):t});const detail=r.status==='failed'&&r.detail?help+' Motivo: '+r.detail:help;return '<span class="pill '+cls+'" title="'+esc(detail)+'">'+label+'</span>'};
+const statusPill=r=>{const claude=r.host==='claude';if(r.directCompaction&&r.status==='restored')return '<span class="pill ok" title="O Jev retornou o texto cortado como resposta à compactação do Codex.">Cortado pelo Jev</span>';const[cls,label,help]=((claude&&CLAUDE_STATUS[r.status])||STATUS[r.status]||STATUS.prepared).map(t=>{t=t.replace('Codex',HOST[r.host]||'Codex');return claude?t.replace('Não enviado','Sem corte'):t});const detail=r.status==='failed'&&r.detail?help+' Motivo: '+r.detail:help;return '<span class="pill '+cls+'" title="'+esc(detail)+'">'+label+'</span>'};
 const decisionPill=k=>'<span class="pill '+DECISION[k][0]+'">'+DECISION[k][1]+'</span>';
 
 let lastRun=null,lastRunJson='',tapeFocus=null,tapeSegs=[];
@@ -423,10 +433,11 @@ function renderLastRun(last){
  tapeSegs=tapeSegments(last.blocks,$('#last-run').clientWidth||1000);
  const blocks=tapeSegs.map((g,i)=>'<i class="'+g.decision+'" style="flex-grow:'+Math.max(1,g.chars)+'" data-i="'+i+'"></i>').join('');
  const tape=last.blocks.length?'<div class="tape-wrap"><div class="tape-tip" hidden></div><div class="tape" role="img" aria-label="Saídas de comandos e leituras de arquivo da última compactação, coloridas pela decisão do Jev"'+(tapeFocus?' data-focus="'+tapeFocus+'"':'')+(tapeSegs.length>120?' style="gap:1px"':'')+'>'+blocks+'</div></div><div class="tape-axis"><span>← mais antigo</span><span>cada bloco é um comando; a largura é o tamanho da saída · passe o mouse para ver qual</span><span>mais recente →</span></div>':'<p class="empty">Nenhum comando ou leitura de arquivo nesta compactação.</p>';
+ const returnedChars=last.directCompaction?last.returnedChars:last.injectedPayloadChars;
  const sent=last.status==='restored'
-  ?'<span class="sent-bar"><i style="width:'+Math.max(1,Math.min(100,last.injectedPayloadChars/Math.max(1,last.charsBefore)*100))+'%"></i></span><span class="num">'+f(last.injectedPayloadChars)+' de '+chars(last.charsBefore)+'</span>'
+  ?'<span class="sent-bar"><i style="width:'+Math.max(1,Math.min(100,returnedChars/Math.max(1,last.charsBefore)*100))+'%"></i></span><span class="num">'+f(returnedChars)+' de '+chars(last.charsBefore)+'</span>'
   :'<span></span>'+statusPill(last);
- $('#last-run').innerHTML=tape+'<div class="sent"><span class="sent-label">'+(last.host==='claude'?'Conversa que ficou no Claude Code depois do corte':'Enviado ao '+(HOST[last.host]||'Codex')+' depois da compactação')+'</span>'+sent+'</div>';
+ $('#last-run').innerHTML=tape+'<div class="sent"><span class="sent-label">'+(last.host==='claude'?'Conversa que ficou no Claude Code depois do corte':last.directCompaction?'Texto retornado ao Codex depois do corte':'Enviado ao '+(HOST[last.host]||'Codex')+' depois da compactação')+'</span>'+sent+'</div>';
 }
 function setTapeFocus(k){tapeFocus=k;const tape=$('.tape');if(!tape)return;if(k)tape.dataset.focus=k;else delete tape.dataset.focus}
 $('#last-legend').addEventListener('mouseover',e=>{const tag=e.target.closest('[data-focus]');if(tag)setTapeFocus(tag.dataset.focus)});
@@ -450,7 +461,7 @@ addEventListener('resize',()=>{if(lastRun){lastRunJson='';renderLastRun(lastRun)
 function kpi(label,value,hint,accent){return '<div class="card kpi"><span class="label">'+label+'</span><span class="value'+(accent?' accent':'')+'">'+value+'</span><span class="hint">'+hint+'</span></div>'}
 function renderKpis(s){
  const c=s.runStatusCounts||{},n=k=>c[k]||0;
- const claude=agent==='claude';
+ const claude=agent==='claude'||s.directCompactions>0;
  const parts=[[n('restored'),claude?'cortada':'com envio',claude?'cortadas':'com envio'],[n('nothing_missing')+n('skipped')+n('too_short'),claude?'sem corte':'não enviada',claude?'sem corte':'não enviadas'],[n('failed')+n('restore_failed'),'com erro','com erro'],[n('prepared')+n('ready'),'aguardando','aguardando']].filter(p=>p[0]>0).map(p=>plural(p[0],p[1],p[2]));
  $('#kpis').innerHTML=[
   kpi('Redução média',s.restored?pct(s.completedReductionRatio):'—',s.restored?'nas '+plural(s.restored,'compactação','compactações')+' em que o Jev cortou':'ainda sem compactação concluída',true),
@@ -463,15 +474,15 @@ function renderFlow(s){
  const hosts=[...new Set((s.runs||[]).filter(r=>r.status==='restored').map(r=>HOST[r.host]||'Codex'))].join(' e ao ')||'Codex';
  $('#flow-foot').textContent='O Jev escolhe o que guardar da conversa para '+agents(s)+' '+agentVerb(s,'continuar','continuarem')+' depois da compactação.';
  if(!s.restored){$('#flow').innerHTML='<p class="empty">Ainda sem compactação concluída.</p>';return}
- const read=s.completedCharsBefore,kept=s.completedCharsAfter,sent=s.injectedPayloadChars;
+ const read=s.completedCharsBefore,kept=s.completedCharsAfter,sent=s.deliveredChars,direct=s.directCompactions>0;
  const step=(label,n,hint)=>'<div class="flow-step"><span class="label">'+label+'</span><b class="num">'+f(n)+'</b><span class="hint">'+hint+'</span></div>';
  const arrow=(n,note)=>'<div class="flow-arrow"><span aria-hidden="true">→</span><span class="flow-note"><b class="num">−'+f(n)+'</b><br>'+note+'</span></div>';
  $('#flow').innerHTML='<div class="flow-steps'+(agent==='claude'?' two':'')+'">'
   +step('Texto da conversa analisado',read,'caracteres antes do corte')
   +arrow(Math.max(0,read-kept),'cortados pelo Jev')
   +step('Mantido pelo Jev',kept,'o que ainda é útil; o resto foi cortado')
-  +(agent==='claude'?'':arrow(Math.max(0,kept-sent),'já no resumo ou acima do limite')
-  +step('Enviado ao '+hosts,sent,'o que o resumo perdeu, dentro do limite'))+'</div>';
+  +(agent==='claude'?'':(direct?'<div class="flow-arrow"><span aria-hidden="true">→</span><span class="flow-note">texto preparado para envio</span></div>':arrow(Math.max(0,kept-sent),'já no resumo ou acima do limite'))
+  +step((direct?'Texto entregue ao ':'Enviado ao ')+hosts,sent,direct?'texto retornado pela compactação e eventuais envios antigos':'o que o resumo perdeu, dentro do limite'))+'</div>';
 }
 function renderRuns(runs){
  const shown=runs.filter(r=>r.status!=='ready'&&r.status!=='prepared').slice(0,10),max=Math.max(1,...shown.map(r=>r.charsBefore||0));

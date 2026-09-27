@@ -1,8 +1,9 @@
+import { type SettingsAgent } from './settings.js';
 export interface HookOptions {
     startDashboard?: boolean;
 }
 /** Jev settings shared by the Codex proxy and Claude Code compaction. */
-export declare function jevCompactOptions(env: Record<string, string | undefined>): {
+export declare function jevCompactOptions(env: Record<string, string | undefined>, agent: SettingsAgent): {
     provider: "typesafe" | "openrouter";
     env: Record<string, string | undefined>;
     model: string;

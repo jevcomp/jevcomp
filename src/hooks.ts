@@ -3,9 +3,12 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { dashboardPort, ensureDashboard } from './dashboard-service.js';
 import { providerConfig, resolveApiKey, resolveProvider, type JevProvider } from './provider.js';
-import { userSettings } from './settings.js';
+import { userSettings, type SettingsAgent } from './settings.js';
+import { bindAuditSource } from './audit.js';
 
 interface HookInput {
+  transcript_path?: string;
+  agent_id?: string;
   session_id: string;
   hook_event_name: string;
   source?: string;
@@ -23,6 +26,8 @@ function parseInput(value: unknown): HookInput {
   const input = value as Record<string, unknown>;
   if (typeof input.session_id !== 'string' || typeof input.hook_event_name !== 'string') throw new Error('invalid hook input');
   return {
+    transcript_path: typeof input.transcript_path === 'string' ? input.transcript_path : undefined,
+    agent_id: typeof input.agent_id === 'string' ? input.agent_id : undefined,
     session_id: input.session_id,
     hook_event_name: input.hook_event_name,
     source: typeof input.source === 'string' ? input.source : undefined,
@@ -43,10 +48,10 @@ async function dashboardNotice(env: Record<string, string | undefined>, options:
 export interface HookOptions { startDashboard?: boolean }
 
 /** Jev settings shared by the Codex proxy and Claude Code compaction. */
-export function jevCompactOptions(env: Record<string, string | undefined>) {
+export function jevCompactOptions(env: Record<string, string | undefined>, agent: SettingsAgent) {
   const provider = resolveProvider({ provider: requestedProvider(env), env });
   const transport = providerConfig({ provider, env });
-  const settings = userSettings(env, 'codex');
+  const settings = userSettings(env, agent);
   return {
     provider,
     env,
@@ -98,5 +103,6 @@ async function claudeHook(input: HookInput, env: Record<string, string | undefin
 export async function handleHook(value: unknown, env: Record<string, string | undefined> = process.env, options: HookOptions = {}): Promise<Record<string, unknown>> {
   const input = parseInput(value);
   if (!env.CLAUDE_PLUGIN_ROOT) return { continue: true, suppressOutput: true };
+  if (input.transcript_path) await bindAuditSource(env, 'claude', input.session_id, input.transcript_path, input.agent_id);
   return claudeHook(input, env, options);
 }

@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { isCodexCompactionRequest, startCodexProxy } from '../dist/codex-proxy.js';
+import { configureAudit, auditRoot } from '../dist/audit-store.js';
+import { auditManifests } from '../dist/audit.js';
 
 const compactionFixture = JSON.parse(await readFile(new URL('./fixtures/codex-compaction-request.json', import.meta.url), 'utf8'));
 
@@ -227,6 +229,7 @@ test('answers a matching compact request with accepted SSE and records it in his
 
   const codexHome = await makeCodexHome({ auth_mode: 'apikey' });
   const dataDir = join(codexHome, 'jev-data');
+  await configureAudit({ JEVCOMP_DATA_DIR: dataDir }, 'codex', 'evidence');
   const proxy = await startCodexProxy({
     CODEX_HOME: codexHome,
     JEVCOMP_DATA_DIR: dataDir,
@@ -271,6 +274,36 @@ test('answers a matching compact request with accepted SSE and records it in his
   assert.equal(history[0].sessionId, 'fixture-session');
   assert.equal(history[1].status, 'restored');
   assert.equal(history[1].runId, history[0].runId);
+  const audits = await auditManifests({ JEVCOMP_DATA_DIR: dataDir });
+  assert.equal(audits.manifests.length, 1);
+  assert.equal(audits.manifests[0].stage, 'result_produced');
+  assert.equal(audits.manifests[0].sessionId, 'fixture-session');
+  assert.ok(audits.manifests[0].outputHash);
+  assert.equal(history[0].auditId, audits.manifests[0].id);
+});
+
+test('Codex audit records evaluated cuts rejected by the minimum and forwards native compaction', async (t) => {
+  let forwardedBody;
+  const upstream = createServer(async (request, response) => {
+    forwardedBody = await collect(request);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end('{"native":true}');
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => close(upstream));
+  const codexHome = await makeCodexHome({ auth_mode: 'apikey' });
+  const env = { CODEX_HOME: codexHome, JEVCOMP_DATA_DIR: join(codexHome, 'data'), JEVCOMP_MIN_REDUCTION_RATIO: '1', JEVCOMP_PROVIDER: 'typesafe' };
+  await configureAudit(env, 'codex', 'metadata');
+  const proxy = await startCodexProxy(env, { chatgpt: `${upstreamUrl}/backend-api/codex`, api: `${upstreamUrl}/v1` });
+  t.after(() => proxy.close());
+  const response = await fetch(`${proxy.baseUrl}/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(compactionFixture) });
+  assert.deepEqual(await response.json(), { native: true });
+  assert.deepEqual(JSON.parse(forwardedBody), compactionFixture);
+  const { manifests } = await auditManifests(env);
+  assert.equal(manifests.length, 1);
+  assert.equal(manifests[0].stage, 'rejected');
+  assert.equal(manifests[0].reason, 'below_minimum');
+  assert.equal(manifests[0].historyRecorded, true);
 });
 
 test('fails open for compact requests that throw, produce no text, or exceed the summary limit', async (t) => {

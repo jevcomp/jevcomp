@@ -2,6 +2,7 @@ import type { JevAsker, JevQuestions, JevResponse, JevState } from './types.js';
 export type JevProvider = 'auto' | 'typesafe' | 'openrouter';
 export type Env = Record<string, string | undefined>;
 export interface JevClientOptions {
+    auditObserver?: (event: string, value: unknown) => void;
     provider?: JevProvider;
     apiKey?: string;
     model?: string;

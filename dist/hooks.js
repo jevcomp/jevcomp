@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { dashboardPort, ensureDashboard } from './dashboard-service.js';
 import { providerConfig, resolveApiKey, resolveProvider } from './provider.js';
 import { userSettings } from './settings.js';
+import { bindAuditSource } from './audit.js';
 function num(env, key, fallback) {
     const raw = env[key];
     if (raw === undefined || raw.trim() === '')
@@ -18,6 +19,8 @@ function parseInput(value) {
     if (typeof input.session_id !== 'string' || typeof input.hook_event_name !== 'string')
         throw new Error('invalid hook input');
     return {
+        transcript_path: typeof input.transcript_path === 'string' ? input.transcript_path : undefined,
+        agent_id: typeof input.agent_id === 'string' ? input.agent_id : undefined,
         session_id: input.session_id,
         hook_event_name: input.hook_event_name,
         source: typeof input.source === 'string' ? input.source : undefined,
@@ -38,10 +41,10 @@ async function dashboardNotice(env, options) {
     }
 }
 /** Jev settings shared by the Codex proxy and Claude Code compaction. */
-export function jevCompactOptions(env) {
+export function jevCompactOptions(env, agent) {
     const provider = resolveProvider({ provider: requestedProvider(env), env });
     const transport = providerConfig({ provider, env });
-    const settings = userSettings(env, 'codex');
+    const settings = userSettings(env, agent);
     return {
         provider,
         env,
@@ -101,5 +104,7 @@ export async function handleHook(value, env = process.env, options = {}) {
     const input = parseInput(value);
     if (!env.CLAUDE_PLUGIN_ROOT)
         return { continue: true, suppressOutput: true };
+    if (input.transcript_path)
+        await bindAuditSource(env, 'claude', input.session_id, input.transcript_path, input.agent_id);
     return claudeHook(input, env, options);
 }

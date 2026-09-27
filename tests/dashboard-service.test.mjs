@@ -22,6 +22,8 @@ test('Claude plugin session start opens one shared dashboard and later prompts r
   const env = {
     ...process.env,
     CLAUDE_PLUGIN_ROOT: join(root, 'plugin'),
+    CLAUDE_CONFIG_DIR: join(root, 'claude'),
+    CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1',
     JEVCOMP_DATA_DIR: join(root, 'data'),
     CODEX_HOME: join(root, 'codex-home'),
     JEVCOMP_CONFIG_DIR: join(root, 'config'),
