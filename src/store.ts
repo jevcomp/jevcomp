@@ -2,7 +2,6 @@ import { appendFile, chmod, mkdir, readFile, readdir, rename, rm, stat, writeFil
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { legacyHistoryPaths } from './legacy.js';
-import { enabledPluginDataDir } from './plugin-installation.js';
 import type { CallDecision, CompactStats, Message } from './types.js';
 
 export interface SessionState {
@@ -76,7 +75,7 @@ export function readableHistoryPaths(env = process.env): string[] {
   if (env.JEVCOMP_DATA_DIR) return [current];
   // Versions before 0.7.0 kept data in the Codex folders.
   const standalone = join(env.CODEX_HOME ?? join(homedir(), '.codex'), 'jevcomp', 'history.jsonl');
-  const pluginData = [env.PLUGIN_DATA, enabledPluginDataDir(env)].filter((dir): dir is string => !!dir).map((dir) => join(dir, 'history.jsonl'));
+  const pluginData = [env.PLUGIN_DATA].filter((dir): dir is string => !!dir).map((dir) => join(dir, 'history.jsonl'));
   return [...new Set([...legacyHistoryPaths(env), standalone, ...pluginData, current])];
 }
 

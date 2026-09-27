@@ -1,4 +1,4 @@
-import { resetUserSettings, setUserSetting, settingOverride, userSettings, type SettingName, type UserSettings } from './settings.js';
+import { resetUserSettings, setUserSetting, settingOverride, userSettings, type SettingName, type SettingsAgent, type UserSettings } from './settings.js';
 
 type Env = Record<string, string | undefined>;
 interface Choice { value: string; label: string }
@@ -68,8 +68,8 @@ function indexOfCurrent(item: Item, settings: UserSettings): number {
   return choicesWithCurrent(item, settings).findIndex((choice) => choice.value === value || Number(choice.value) === Number(value));
 }
 
-export function describeSettings(env: Env = process.env): Array<{ title: string; value: string; lockedBy?: string }> {
-  const settings = userSettings(env);
+export function describeSettings(env: Env, agent: SettingsAgent): Array<{ title: string; value: string; lockedBy?: string }> {
+  const settings = userSettings(env, agent);
   return SETTINGS_ITEMS.map((item) => ({
     title: item.title,
     value: choicesWithCurrent(item, settings)[indexOfCurrent(item, settings)]?.label ?? item.current(settings),
@@ -78,16 +78,16 @@ export function describeSettings(env: Env = process.env): Array<{ title: string;
 }
 
 /** Moves one setting to its previous or next choice and saves it. */
-export async function stepSetting(name: SettingName, direction: 1 | -1, env: Env = process.env): Promise<void> {
+export async function stepSetting(name: SettingName, direction: 1 | -1, env: Env, agent: SettingsAgent): Promise<void> {
   const item = SETTINGS_ITEMS.find((candidate) => candidate.name === name)!;
-  const settings = userSettings(env);
+  const settings = userSettings(env, agent);
   const choices = choicesWithCurrent(item, settings);
   const next = choices[(indexOfCurrent(item, settings) + direction + choices.length) % choices.length]!;
-  await setUserSetting(name, next.value, env);
+  await setUserSetting(name, next.value, env, agent);
 }
 
-function render(selected: number, env: Env, notice: string): string[] {
-  const rows = describeSettings(env);
+function render(selected: number, env: Env, agent: SettingsAgent, notice: string): string[] {
+  const rows = describeSettings(env, agent);
   const width = Math.max(...rows.map((row) => row.title.length)) + 4;
   const lines = ['jevcomp settings (changes are saved right away)', ''];
   rows.forEach((row, index) => {
@@ -110,12 +110,12 @@ interface Terminal {
 }
 
 /** Runs the arrow-key menu until Esc, q or Ctrl+C. */
-export async function runSettingsMenu(terminal: Terminal, env: Env = process.env): Promise<void> {
+export async function runSettingsMenu(terminal: Terminal, env: Env, agent: SettingsAgent): Promise<void> {
   let selected = 0;
   let notice = '';
   let drawn = 0;
   const draw = () => {
-    const lines = render(selected, env, notice);
+    const lines = render(selected, env, agent, notice);
     const reset = drawn ? `\x1b[${drawn}F\x1b[J` : '';
     terminal.output.write(`${reset}${lines.join('\n')}\n`);
     drawn = lines.length;
@@ -129,14 +129,14 @@ export async function runSettingsMenu(terminal: Terminal, env: Env = process.env
     const change = async (direction: 1 | -1) => {
       notice = '';
       if (selected === SETTINGS_ITEMS.length) {
-        await resetUserSettings(env);
+        await resetUserSettings(env, agent);
         notice = '  All settings are back to their defaults.';
         return;
       }
       const item = SETTINGS_ITEMS[selected]!;
       const lockedBy = settingOverride(item.name, env);
       if (lockedBy) { notice = `  ${lockedBy} is set in your environment, so it decides this value.`; return; }
-      await stepSetting(item.name, direction, env);
+      await stepSetting(item.name, direction, env, agent);
     };
     const onData = (chunk: any) => {
       busy = busy.then(async () => {

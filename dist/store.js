@@ -2,7 +2,6 @@ import { appendFile, chmod, mkdir, readFile, readdir, rename, rm, stat, writeFil
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { legacyHistoryPaths } from './legacy.js';
-import { enabledPluginDataDir } from './plugin-installation.js';
 function safe(value) { return value.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 180); }
 /** One folder for every agent, so the Codex and Claude Code plugins share history and the dashboard. */
 export function dataDir(env = process.env) {
@@ -25,7 +24,7 @@ export function readableHistoryPaths(env = process.env) {
         return [current];
     // Versions before 0.7.0 kept data in the Codex folders.
     const standalone = join(env.CODEX_HOME ?? join(homedir(), '.codex'), 'jevcomp', 'history.jsonl');
-    const pluginData = [env.PLUGIN_DATA, enabledPluginDataDir(env)].filter((dir) => !!dir).map((dir) => join(dir, 'history.jsonl'));
+    const pluginData = [env.PLUGIN_DATA].filter((dir) => !!dir).map((dir) => join(dir, 'history.jsonl'));
     return [...new Set([...legacyHistoryPaths(env), standalone, ...pluginData, current])];
 }
 async function ensurePrivateDir(path) {

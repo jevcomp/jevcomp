@@ -32,7 +32,7 @@ test('settings page changes a setting and reports it back', async (t) => {
   assert.equal(response.status, 200);
   const snapshot = await response.json();
   assert.equal(snapshot.settings.find((item) => item.name === 'restore-mode').value, 'minimal');
-  assert.equal(userSettings(env).restoreMode, 'minimal');
+  assert.equal(userSettings(env, 'codex').restoreMode, 'minimal');
   assert.equal(snapshot.version, VERSION);
   assert.deepEqual(snapshot.agents, { codex: null, claude: null, agy: { installed: false } });
 });
@@ -64,6 +64,22 @@ test('changes without the page token or from another origin are refused', async 
   const { url, post } = await dashboard(t);
   assert.equal((await post({ action: 'reset' }, { 'x-jevcomp-token': 'guess' })).status, 403);
   assert.equal((await post({ action: 'reset' }, { origin: 'https://example.com' })).status, 403);
+});
+
+test('settings API isolates agent sections and rejects an invalid agent', async (t) => {
+  const { env, url, token } = await dashboard(t);
+  const send = (agent, body) => fetch(`${url}api/settings?agent=${agent}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-jevcomp-token': token }, body: JSON.stringify(body),
+  });
+  const claude = await send('claude', { action: 'setting', name: 'restore-mode', value: 'preserve' });
+  assert.equal(claude.status, 200);
+  assert.equal((await claude.json()).settings.find((item) => item.name === 'restore-mode').value, 'preserve');
+  assert.equal(userSettings(env, 'codex').restoreMode, 'minimal');
+  assert.equal(userSettings(env, 'claude').restoreMode, 'preserve');
+  const invalid = await fetch(`${url}api/settings?agent=invalid`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-jevcomp-token': token }, body: JSON.stringify({ action: 'reset' }),
+  });
+  assert.equal(invalid.status, 400);
 });
 
 test('requests addressed to another host name are refused', async (t) => {

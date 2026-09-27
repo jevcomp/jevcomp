@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { configDir, type Env } from './provider.js';
 
 export type RestoreMode = 'preserve' | 'balanced' | 'minimal';
+export type SettingsAgent = 'codex' | 'claude' | 'agy';
 export type SettingName = 'restore-mode' | 'restore-max-chars' | 'pin-recent-messages' | 'loss-threshold' | 'min-reduction-ratio';
 
 interface SavedSettings {
@@ -48,10 +49,35 @@ export function settingsPath(env: Env = process.env): string {
   return env.JEVCOMP_SETTINGS_FILE ?? join(configDir(env), 'settings.json');
 }
 
-function saved(env: Env): SavedSettings {
+const AGENTS: readonly SettingsAgent[] = ['codex', 'claude', 'agy'];
+
+// Settings saved before 0.7.3 sit at the top level; they become each agent's starting point, then disappear.
+function savedByAgent(path: string): Partial<Record<SettingsAgent, SavedSettings>> {
+  let record: Record<string, unknown>;
   try {
-    return sanitizeSavedSettings(JSON.parse(String(readFileSync(settingsPath(env), 'utf8'))));
+    const parsed = JSON.parse(String(readFileSync(path, 'utf8')));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    record = parsed as Record<string, unknown>;
   } catch { return {}; }
+  const hasAgentSections = AGENTS.some((agent) => agent in record);
+  const legacy = hasAgentSections ? {} : sanitizeSavedSettings(record);
+  const byAgent: Partial<Record<SettingsAgent, SavedSettings>> = {};
+  for (const agent of AGENTS) {
+    const own = agent in record ? sanitizeSavedSettings(record[agent]) : legacy;
+    if (Object.keys(own).length > 0) byAgent[agent] = own;
+  }
+  return byAgent;
+}
+
+async function writeSavedByAgent(path: string, byAgent: Partial<Record<SettingsAgent, SavedSettings>>): Promise<void> {
+  if (Object.keys(byAgent).length === 0) { await rm(path, { force: true }); return; }
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, `${JSON.stringify(byAgent, null, 2)}\n`, { mode: 0o600 });
+  try { await chmod(path, 0o600); } catch {}
+}
+
+function saved(env: Env, agent: SettingsAgent): SavedSettings {
+  return { ...savedByAgent(settingsPath(env))[agent] };
 }
 
 function envNumber(env: Env, keys: string[]): number | undefined {
@@ -85,8 +111,8 @@ export function settingOverride(name: SettingName, env: Env = process.env): stri
   return ENV_NAMES[name].find((key) => (env[key] ?? '').trim() !== '');
 }
 
-export function userSettings(env: Env = process.env): UserSettings {
-  const stored = saved(env);
+export function userSettings(env: Env, agent: SettingsAgent): UserSettings {
+  const stored = saved(env, agent);
   const rawMode = env.JEVCOMP_RESTORE_MODE;
   const modeFromEnv = normalizedMode(rawMode);
   // Codex compaction costs the same with or without jevcomp, so by default it adds back only the short list.
@@ -109,8 +135,8 @@ export function userSettings(env: Env = process.env): UserSettings {
   };
 }
 
-export async function setUserSetting(name: SettingName, rawValue: string, env: Env = process.env): Promise<UserSettings> {
-  const current = saved(env);
+export async function setUserSetting(name: SettingName, rawValue: string, env: Env, agent: SettingsAgent): Promise<UserSettings> {
+  const current = saved(env, agent);
   if (name === 'restore-mode') {
     const mode = normalizedMode(rawValue);
     if (!mode) throw new Error('restore-mode must be preserve, balanced, or minimal');
@@ -127,12 +153,13 @@ export async function setUserSetting(name: SettingName, rawValue: string, env: E
     else current.minReductionRatio = n;
   }
   const path = settingsPath(env);
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
-  try { await chmod(path, 0o600); } catch {}
-  return userSettings(env);
+  await writeSavedByAgent(path, { ...savedByAgent(path), [agent]: current });
+  return userSettings(env, agent);
 }
 
-export async function resetUserSettings(env: Env = process.env): Promise<void> {
-  await rm(settingsPath(env), { force: true });
+export async function resetUserSettings(env: Env, agent: SettingsAgent): Promise<void> {
+  const path = settingsPath(env);
+  const byAgent = savedByAgent(path);
+  delete byAgent[agent];
+  await writeSavedByAgent(path, byAgent);
 }

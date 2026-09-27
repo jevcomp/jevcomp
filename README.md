@@ -80,7 +80,7 @@ It shows only what jevcomp can measure: characters before and after each compact
 
 ## Settings
 
-Run `jevcomp settings`, use the **Configurações** page of the dashboard, or ask the agent to change a jevcomp setting. The defaults suit most people.
+Run `jevcomp settings`, use the **Configurações** page of the dashboard, or ask the agent to change a jevcomp setting. Each program has its own settings. The defaults suit most people.
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |

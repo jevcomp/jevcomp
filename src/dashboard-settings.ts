@@ -3,10 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { dashboardPort } from './dashboard-service.js';
 import { inspectHooks } from './install.js';
-import { enabledPluginRoot } from './plugin-installation.js';
 import { keyStatus, resolveProvider, savePreferredProvider, saveProviderConfiguration, type KeyStatus } from './provider.js';
 import { SETTINGS_ITEMS } from './settings-menu.js';
-import { resetUserSettings, setUserSetting, settingOverride, userSettings, type SettingName } from './settings.js';
+import { resetUserSettings, setUserSetting, settingOverride, userSettings, type SettingName, type SettingsAgent } from './settings.js';
 import { readHistory, readHookActivity, type HookActivity } from './store.js';
 import { VERSION } from './version.js';
 import { agyCaInstalled, agyCertificateThumbprint } from './agy-proxy.js';
@@ -22,7 +21,7 @@ export interface SettingsSnapshot {
   version: string;
   lastAgent: 'codex' | 'claude' | 'agy' | null;
   agents: {
-    codex: { kind: 'plugin' | 'command'; hooks: { installed: number; total: number; activity: HookActivity } } | null;
+    codex: { hooks: { installed: number; total: number; activity: HookActivity } } | null;
     claude: { functionHooks: boolean; lastRun: string | null } | null;
     agy: { installed: boolean };
   };
@@ -41,17 +40,6 @@ async function antigravityInstalled(env: Env): Promise<boolean> {
   return installed;
 }
 
-async function pluginHookCount(pluginRoot: string): Promise<number> {
-  // Versions before Claude Code support kept the Codex hooks in hooks.json.
-  for (const file of ['codex.json', 'hooks.json']) {
-    try {
-      const manifest = JSON.parse(await readFile(join(pluginRoot, 'hooks', file), 'utf8'));
-      return Object.keys(manifest.hooks ?? {}).length;
-    } catch {}
-  }
-  return 0;
-}
-
 async function readJson(path: string): Promise<Record<string, any>> {
   try { return JSON.parse(await readFile(path, 'utf8')) ?? {}; } catch { return {}; }
 }
@@ -64,11 +52,10 @@ async function claudeInstallation(env: Env): Promise<{ functionHooks: boolean } 
   return ids.length ? { functionHooks: settings.env?.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS === '1' } : null;
 }
 
-export async function settingsSnapshot(env: Env = process.env): Promise<SettingsSnapshot> {
-  const settings = userSettings(env);
-  const pluginRoot = enabledPluginRoot(env);
+export async function settingsSnapshot(env: Env = process.env, agent: SettingsAgent = 'codex'): Promise<SettingsSnapshot> {
+  const settings = userSettings(env, agent);
   const history = await readHistory(env);
-  const codexHooks = pluginRoot ? await pluginHookCount(pluginRoot) : (await inspectHooks(env)).events.length;
+  const codexHooks = (await inspectHooks(env)).events.length;
   const claude = await claudeInstallation(env);
   const agyInstalled = await antigravityInstalled(env);
   const lastJev = [...history].reverse().find((row) => row.phase === 'precompact' || (!row.phase && row.status === 'failed'));
@@ -87,7 +74,7 @@ export async function settingsSnapshot(env: Env = process.env): Promise<Settings
     version: VERSION,
     lastAgent: history.length ? history[history.length - 1]!.host ?? 'codex' : null,
     agents: {
-      codex: codexHooks ? { kind: pluginRoot ? 'plugin' : 'command', hooks: { installed: codexHooks, total: 4, activity: await readHookActivity(env) } } : null,
+      codex: codexHooks ? { hooks: { installed: codexHooks, total: 4, activity: await readHookActivity(env) } } : null,
       claude: claude ? { ...claude, lastRun: [...history].reverse().find((row) => row.host === 'claude')?.at ?? null } : null,
       agy: { installed: agyInstalled },
     },
@@ -107,15 +94,15 @@ function provider(value: unknown): Provider {
 }
 
 /** Applies one change sent by the settings page. */
-export async function applySettingsChange(body: Record<string, unknown>, env: Env = process.env): Promise<void> {
+export async function applySettingsChange(body: Record<string, unknown>, env: Env, agent: SettingsAgent): Promise<void> {
   if (body.action === 'setting') {
     const name = body.name as SettingName;
     if (!SETTINGS_ITEMS.some((item) => item.name === name)) throw new Error(`unknown setting: ${String(body.name)}`);
     const lockedBy = settingOverride(name, env);
     if (lockedBy) throw new Error(`${lockedBy} decides this value`);
-    await setUserSetting(name, String(body.value), env);
+    await setUserSetting(name, String(body.value), env, agent);
   } else if (body.action === 'reset') {
-    await resetUserSettings(env);
+    await resetUserSettings(env, agent);
   } else if (body.action === 'provider') {
     const target = provider(body.provider);
     if (keyStatus(target, env).source === 'none') throw new Error('enter a key for this provider first');

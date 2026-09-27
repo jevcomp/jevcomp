@@ -84,7 +84,7 @@ test('dashboard cache invalidates when persisted settings change without new his
   try {
     const before = await fetch(`${url}api/stats`).then((response) => response.json());
     assert.equal(before.settings.restoreMode, 'minimal');
-    await setUserSetting('restore-mode', 'minimal', env);
+    await setUserSetting('restore-mode', 'minimal', env, 'codex');
     const after = await fetch(`${url}api/stats`).then((response) => response.json());
     assert.equal(after.settings.restoreMode, 'minimal');
   } finally {

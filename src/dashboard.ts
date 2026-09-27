@@ -282,7 +282,7 @@ export async function stats(env = process.env, agent?: 'codex' | 'claude' | 'agy
     jevUsageCoverage: jevRequests ? jevUsageReportedRequests / jevRequests : 0,
     evaluatedSelections: scored.length,
     averageSelectionMs: scored.length ? Math.round(selectionMs / scored.length) : 0,
-    settings: userSettings(env),
+    settings: userSettings(env, 'codex'),
     byTool: [...byTool.values()].sort((a, b) => b.removedChars - a.removedChars),
     recentDecisions,
     runs: runs.slice(0, 100),
@@ -630,7 +630,7 @@ function renderSettings(s){
  let cards='';
  if(codex){
   const latest=Object.values(codex.hooks.activity||{}).sort().pop();
-  cards+=card('Codex','Como o jevcomp está ligado ao Codex',info('Instalação',(codex.kind==='plugin'?'Plugin do Codex':'Comando jevcomp')+version)
+  cards+=card('Codex','Como o jevcomp está ligado ao Codex',info('Instalação','Comando jevcomp'+version)
    +'<div class="info"><span>Hooks</span><span class="pill '+(codex.hooks.installed>=codex.hooks.total?'ok':'fail')+'">'+codex.hooks.installed+' de '+codex.hooks.total+' instalados</span></div>'
    +info('Último sinal dos hooks',latest?esc(ago(latest)):'Ainda nenhum'));
  }
@@ -652,8 +652,9 @@ function renderSettings(s){
   return '<div class="setting"><h3>'+text.title+'</h3><p>'+text.help.replace('AGENT',AGENT_NAME[agent])+'</p><div class="control seg'+(text.numbers?' numbers':'')+'" role="group" aria-label="'+text.title+'" data-name="'+item.name+'"'+(locked?' aria-disabled="true"':'')+'>'+buttons+'</div>'+note+'</div>';
  }).join('');
 }
-function loadSettings(){return fetch('/api/settings',{cache:'no-store'}).then(r=>r.json()).then(renderSettings).catch(e=>toast('Erro ao ler as configurações: '+e.message,true))}
-function send(body,message){return fetch('/api/settings',{method:'POST',headers:{'content-type':'application/json','x-jevcomp-token':token},body:JSON.stringify(body)}).then(r=>r.json().then(j=>{if(!r.ok)throw Error(j.error||'HTTP '+r.status);return j})).then(s=>{renderSettings(s);toast(message||'Salvo');return true}).catch(e=>{toast('Não salvo: '+e.message,true);return false})}
+function settingsUrl(){return '/api/settings?agent='+encodeURIComponent(agent||'codex')}
+function loadSettings(){return fetch(settingsUrl(),{cache:'no-store'}).then(r=>r.json()).then(renderSettings).catch(e=>toast('Erro ao ler as configurações: '+e.message,true))}
+function send(body,message){return fetch(settingsUrl(),{method:'POST',headers:{'content-type':'application/json','x-jevcomp-token':token},body:JSON.stringify(body)}).then(r=>r.json().then(j=>{if(!r.ok)throw Error(j.error||'HTTP '+r.status);return j})).then(s=>{renderSettings(s);toast(message||'Salvo');return true}).catch(e=>{toast('Não salvo: '+e.message,true);return false})}
 $('#connection').addEventListener('click',e=>{
  if(!settingsState)return;
  if(e.target.closest('[data-change]')){changingKey=true;renderConnection();$('#key-input').focus();return}
@@ -738,11 +739,17 @@ export async function startDashboard(port = 43127, env = process.env): Promise<{
       if (url.pathname === '/api/settings' && req.method === 'POST') {
         const origin = req.headers.origin;
         if (req.headers['x-jevcomp-token'] !== token || (origin && origin !== `http://${req.headers.host}`)) return json(res, { error: 'forbidden' }, 403);
-        try { await applySettingsChange(await jsonBody(req), env); }
+        const requestedAgent = url.searchParams.get('agent') ?? 'codex';
+        if (requestedAgent !== 'codex' && requestedAgent !== 'claude' && requestedAgent !== 'agy') return json(res, { error: 'invalid agent' }, 400);
+        try { await applySettingsChange(await jsonBody(req), env, requestedAgent); }
         catch (error) { return json(res, { error: error instanceof Error ? error.message : String(error) }, 400); }
-        return json(res, await settingsSnapshot(env));
+        return json(res, await settingsSnapshot(env, requestedAgent));
       }
-      if (url.pathname === '/api/settings') return json(res, await settingsSnapshot(env));
+      if (url.pathname === '/api/settings') {
+        const requestedAgent = url.searchParams.get('agent') ?? 'codex';
+        if (requestedAgent !== 'codex' && requestedAgent !== 'claude' && requestedAgent !== 'agy') return json(res, { error: 'invalid agent' }, 400);
+        return json(res, await settingsSnapshot(env, requestedAgent));
+      }
       if (url.pathname === '/api/health') return json(res, {
         ok: true,
         service: 'jevcomp-dashboard',

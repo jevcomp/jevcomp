@@ -59,8 +59,8 @@ function indexOfCurrent(item, settings) {
     const value = item.current(settings);
     return choicesWithCurrent(item, settings).findIndex((choice) => choice.value === value || Number(choice.value) === Number(value));
 }
-export function describeSettings(env = process.env) {
-    const settings = userSettings(env);
+export function describeSettings(env, agent) {
+    const settings = userSettings(env, agent);
     return SETTINGS_ITEMS.map((item) => ({
         title: item.title,
         value: choicesWithCurrent(item, settings)[indexOfCurrent(item, settings)]?.label ?? item.current(settings),
@@ -68,15 +68,15 @@ export function describeSettings(env = process.env) {
     }));
 }
 /** Moves one setting to its previous or next choice and saves it. */
-export async function stepSetting(name, direction, env = process.env) {
+export async function stepSetting(name, direction, env, agent) {
     const item = SETTINGS_ITEMS.find((candidate) => candidate.name === name);
-    const settings = userSettings(env);
+    const settings = userSettings(env, agent);
     const choices = choicesWithCurrent(item, settings);
     const next = choices[(indexOfCurrent(item, settings) + direction + choices.length) % choices.length];
-    await setUserSetting(name, next.value, env);
+    await setUserSetting(name, next.value, env, agent);
 }
-function render(selected, env, notice) {
-    const rows = describeSettings(env);
+function render(selected, env, agent, notice) {
+    const rows = describeSettings(env, agent);
     const width = Math.max(...rows.map((row) => row.title.length)) + 4;
     const lines = ['jevcomp settings (changes are saved right away)', ''];
     rows.forEach((row, index) => {
@@ -93,12 +93,12 @@ function render(selected, env, notice) {
     return lines;
 }
 /** Runs the arrow-key menu until Esc, q or Ctrl+C. */
-export async function runSettingsMenu(terminal, env = process.env) {
+export async function runSettingsMenu(terminal, env, agent) {
     let selected = 0;
     let notice = '';
     let drawn = 0;
     const draw = () => {
-        const lines = render(selected, env, notice);
+        const lines = render(selected, env, agent, notice);
         const reset = drawn ? `\x1b[${drawn}F\x1b[J` : '';
         terminal.output.write(`${reset}${lines.join('\n')}\n`);
         drawn = lines.length;
@@ -112,7 +112,7 @@ export async function runSettingsMenu(terminal, env = process.env) {
         const change = async (direction) => {
             notice = '';
             if (selected === SETTINGS_ITEMS.length) {
-                await resetUserSettings(env);
+                await resetUserSettings(env, agent);
                 notice = '  All settings are back to their defaults.';
                 return;
             }
@@ -122,7 +122,7 @@ export async function runSettingsMenu(terminal, env = process.env) {
                 notice = `  ${lockedBy} is set in your environment, so it decides this value.`;
                 return;
             }
-            await stepSetting(item.name, direction, env);
+            await stepSetting(item.name, direction, env, agent);
         };
         const onData = (chunk) => {
             busy = busy.then(async () => {

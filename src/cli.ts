@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compactForClaude } from './claude-compact.js';
 import { runCodex } from './codex-proxy.js';
@@ -11,11 +11,10 @@ import { compactMessages, reductionRatio } from './compact.js';
 import { startDashboard } from './dashboard.js';
 import { dashboardInstancePath, dashboardPort, ensureDashboard, restartDashboard, runningDashboard, stopDashboard } from './dashboard-service.js';
 import { enableFunctionHooks, handleHook } from './hooks.js';
-import { resetUserSettings, setUserSetting, userSettings, type SettingName } from './settings.js';
+import { resetUserSettings, setUserSetting, userSettings, type SettingName, type SettingsAgent } from './settings.js';
 import { describeSettings, runSettingsMenu, SETTINGS_ITEMS } from './settings-menu.js';
 import { inspectHooks, installHooks, installRuntime, runtimeDir, uninstallHooks } from './install.js';
 import { adoptLegacyEnvironment, migrateLegacyConfig } from './legacy.js';
-import { enabledPluginRoot } from './plugin-installation.js';
 import { configDir, hasSavedProviderKey, providerConfig, resolveApiKey, resolveProvider, saveProviderConfiguration, type JevProvider } from './provider.js';
 import { renderMessages } from './render.js';
 import { loadCodexRollout } from './rollout.js';
@@ -27,17 +26,13 @@ function fmt(n: number): string { return Number(n || 0).toLocaleString(); }
 function chars(n: number): string { return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M chars` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k chars` : `${fmt(n)} chars`; }
 
 function help(): void {
-  const pluginRoot = enabledPluginRoot();
-  const runningRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-  const command = pluginRoot?.toLowerCase() === runningRoot.toLowerCase()
-    ? `node "${join(pluginRoot, 'dist', 'cli.js')}"`
-    : 'jevcomp';
+  const command = 'jevcomp';
   console.log(`jevcomp
 
   ${command} install      Connect jevcomp to Codex, Claude Code or Antigravity
   ${' '.repeat(command.length)}              and enter your key (run it again to change them)
   ${' '.repeat(command.length)}              Skip the questions: install [openrouter|typesafe] [codex|claude|agy|all]
-  ${command} settings     Change how jevcomp behaves
+  ${command} settings [codex|claude|agy] [name value|reset]  Change settings (default: codex)
   ${command} doctor       Check that everything works
   ${command} dashboard    Restart the dashboard
   ${command} uninstall    Remove jevcomp from Codex, Claude Code or Antigravity
@@ -146,7 +141,7 @@ async function readiness() {
   const provider = resolveProvider({ provider: process.env.JEVCOMP_PROVIDER as JevProvider | undefined, env: process.env });
   const config = providerConfig({ provider, env: process.env });
   const hooks = await inspectHooks(process.env);
-  const settings = userSettings(process.env);
+  const settings = userSettings(process.env, 'codex');
   return {
     node: process.version ?? 'unknown',
     provider,
@@ -156,7 +151,6 @@ async function readiness() {
     hooksInstalled: hooks.installed,
     hookEvents: hooks.events,
     hooksFile: hooks.path,
-    pluginRoot: enabledPluginRoot(),
     dataDir: dataDir(process.env),
     dashboardUrl: (await runningDashboard(dashboardPort(process.env), process.env))?.url ?? null,
     settings,
@@ -164,8 +158,8 @@ async function readiness() {
 }
 
 
-function printSettings(): void {
-  const rows = describeSettings(process.env);
+function printSettings(agent: SettingsAgent): void {
+  const rows = describeSettings(process.env, agent);
   const width = Math.max(...rows.map((row) => row.title.length)) + 4;
   for (const row of rows) console.log(`${row.title.padEnd(width)}${row.value}${row.lockedBy ? ` (set by ${row.lockedBy})` : ''}`);
 }
@@ -193,19 +187,10 @@ async function install(args: readonly string[]): Promise<void> {
     console.log(`Dashboard: ${dashboardAddress()} (opens with each Claude Code session)`);
     return;
   }
-  if (enabledPluginRoot()) {
-    await uninstallHooks();
-    console.log('Codex plugin detected. In Codex, type /hooks and approve the four jevcomp hooks.');
-  } else {
-    const runtimeCli = await installRuntime(fileURLToPath(import.meta.url), process.env);
-    await installHooks(runtimeCli);
-    console.log('Connected to Codex. Restart Codex, type /hooks and approve the four jevcomp hooks.');
-  }
+  const runtimeCli = await installRuntime(fileURLToPath(import.meta.url), process.env);
+  await installHooks(runtimeCli);
+  console.log('Connected to Codex. Restart Codex, type /hooks and approve the four jevcomp hooks.');
   console.log(`Dashboard: ${dashboardAddress()} (opens with each ${agents.map((agent) => AGENT_NAMES[agent]).join(' or ')} session)`);
-}
-
-function pluginId(pluginRoot: string): string {
-  return `jevcomp@${basename(dirname(dirname(pluginRoot)))}`;
 }
 
 async function uninstall(args: readonly string[]): Promise<void> {
@@ -213,9 +198,8 @@ async function uninstall(args: readonly string[]): Promise<void> {
   if (args.length === 1 && args[0] === 'agy') return;
   args = args.filter((arg) => arg !== 'agy');
   const agents = agentArgs(args) ?? ['codex', 'claude'];
-  const pluginRoot = enabledPluginRoot();
   const claudeInstalled = claudePluginInstalled();
-  const codexStays = !agents.includes('codex') && (!!pluginRoot || (await inspectHooks(process.env)).installed);
+  const codexStays = !agents.includes('codex') && (await inspectHooks(process.env)).installed;
   // The dashboard serves both agents, so it keeps running while one of them still uses jevcomp.
   if (!codexStays && !(claudeInstalled && !agents.includes('claude'))) await stopDashboard(dashboardPort(process.env), process.env);
   if (agents.includes('claude')) {
@@ -227,12 +211,7 @@ async function uninstall(args: readonly string[]): Promise<void> {
     return;
   }
   await uninstallHooks();
-  if (pluginRoot) {
-    execFileSync('codex', ['plugin', 'remove', pluginId(pluginRoot)], { stdio: 'inherit', windowsHide: true });
-    const marketplace = basename(dirname(dirname(pluginRoot)));
-    // Only our own marketplace: another one may still list plugins the user wants.
-    if (marketplace === 'jevcomp') execFileSync('codex', ['plugin', 'marketplace', 'remove', marketplace], { stdio: 'inherit', windowsHide: true });
-  } else await rm(runtimeDir(process.env), { recursive: true, force: true });
+  await rm(runtimeDir(process.env), { recursive: true, force: true });
   console.log('jevcomp was removed from Codex.');
   console.log(`Kept your key and settings: ${configDir(process.env)}`);
   console.log(`Kept your history: ${dataDir(process.env)}`);
@@ -248,16 +227,17 @@ async function main(): Promise<void> {
   if (cmd === 'hook') { const out = await handleHook(JSON.parse(await stdin()), process.env, { startDashboard: true }); process.stdout.write(`${JSON.stringify(out)}\n`); return; }
 
   if (cmd === 'settings') {
-    if (args[0] === 'reset') { await resetUserSettings(process.env); printSettings(); return; }
+    const agent: SettingsAgent = ['codex', 'claude', 'agy'].includes(args[0] ?? '') ? args.shift() as SettingsAgent : 'codex';
+    if (args[0] === 'reset') { await resetUserSettings(process.env, agent); printSettings(agent); return; }
     if (args.length >= 2) {
       const name = args[0] as SettingName;
       if (!SETTINGS_ITEMS.some((item) => item.name === name)) throw new Error(`unknown setting: ${args[0]}`);
-      await setUserSetting(name, args[1]!, process.env);
-      printSettings();
+      await setUserSetting(name, args[1]!, process.env, agent);
+      printSettings(agent);
       return;
     }
-    if (!interactive()) { printSettings(); return; }
-    await runSettingsMenu({ input: process.stdin, output: process.stdout }, process.env);
+    if (!interactive()) { printSettings(agent); return; }
+    await runSettingsMenu({ input: process.stdin, output: process.stdout }, process.env, agent);
     return;
   }
 
@@ -274,18 +254,17 @@ async function main(): Promise<void> {
     if (args.includes('--json')) { console.log(JSON.stringify(value, null, 2)); return; }
     console.log(`jevcomp doctor\n`);
     console.log(`${value.apiKeyConfigured ? 'OK' : 'MISSING'}  API key (${value.provider})`);
-    if (value.pluginRoot) console.log('CHECK  Plugin hooks: open /hooks and confirm four active');
-    else console.log(`${value.hooksInstalled ? 'OK' : 'MISSING'}  Codex hooks (${value.hookEvents.join(', ') || 'none'})`);
+    console.log(`${value.hooksInstalled ? 'OK' : 'MISSING'}  Codex hooks (${value.hookEvents.join(', ') || 'none'})`);
     console.log(`OK  Node ${value.node}`);
     console.log(`    Model: ${value.model}`);
-    console.log(`    Hooks: ${value.pluginRoot ? join(value.pluginRoot, 'hooks', 'codex.json') : value.hooksFile}`);
+    console.log(`    Hooks: ${value.hooksFile}`);
     console.log(`    Data:  ${value.dataDir}`);
     console.log(`    Dashboard: ${value.dashboardUrl ?? `${dashboardAddress()} (not running; starts with the next Codex session)`}`);
     console.log(`    Restore: ${value.settings.restoreMode} · max ${fmt(value.settings.restoreMaxChars)} chars`);
     console.log(`    Pruning: loss <= ${value.settings.lossThreshold.toFixed(2)} · pin ${fmt(value.settings.pinRecentMessages)} recent messages · require ${(value.settings.minReductionRatio * 100).toFixed(0)}% reduction`);
     if (value.settings.restoreModeWarning) console.log(`WARN  ${value.settings.restoreModeWarning}`);
-    if (!value.apiKeyConfigured || (!value.pluginRoot && !value.hooksInstalled)) {
-      console.log(`\nFix: ${value.pluginRoot ? `node "${fileURLToPath(import.meta.url)}"` : 'jevcomp'} install`);
+    if (!value.apiKeyConfigured || !value.hooksInstalled) {
+      console.log(`\nFix: jevcomp install`);
     }
     return;
   }

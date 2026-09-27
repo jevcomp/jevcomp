@@ -180,7 +180,7 @@ async function restore(input: HookInput, event: 'SessionStart' | 'UserPromptSubm
   const preview = await peekReady(input.session_id, ttl, env);
   if (!preview) return { continue: true, suppressOutput: true };
 
-  const settings = userSettings(env);
+  const settings = userSettings(env, 'codex');
   const restoreMode = settings.restoreMode;
   const cap = settings.restoreMaxChars;
   let retainedMessages: Message[] | undefined;
@@ -290,7 +290,7 @@ export interface HookOptions { startDashboard?: boolean }
 export function jevCompactOptions(env: Record<string, string | undefined>) {
   const provider = resolveProvider({ provider: requestedProvider(env), env });
   const transport = providerConfig({ provider, env });
-  const settings = userSettings(env);
+  const settings = userSettings(env, 'codex');
   return {
     provider,
     env,
@@ -376,7 +376,7 @@ export async function handleHook(value: unknown, env: Record<string, string | un
       const jev = jevCompactOptions(env);
       const provider = jev.provider;
       const result = await compactMessages(messages, jev);
-      const minimum = userSettings(env).minReductionRatio;
+      const minimum = userSettings(env, 'codex').minReductionRatio;
       if (reductionRatio(result) < minimum) {
         await tryAppendHistory({ at: new Date().toISOString(), runId, sessionId: input.session_id, turnId: input.turn_id, trigger: input.trigger, model: input.model, provider, phase: 'precompact', status: 'skipped', stats: result.stats, decisions: result.decisions, detail: `reduction below ${minimum}` }, env);
         return { continue: true, suppressOutput: true };

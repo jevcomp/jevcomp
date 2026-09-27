@@ -25,13 +25,43 @@ function sanitizeSavedSettings(value) {
 export function settingsPath(env = process.env) {
     return env.JEVCOMP_SETTINGS_FILE ?? join(configDir(env), 'settings.json');
 }
-function saved(env) {
+const AGENTS = ['codex', 'claude', 'agy'];
+// Settings saved before 0.7.3 sit at the top level; they become each agent's starting point, then disappear.
+function savedByAgent(path) {
+    let record;
     try {
-        return sanitizeSavedSettings(JSON.parse(String(readFileSync(settingsPath(env), 'utf8'))));
+        const parsed = JSON.parse(String(readFileSync(path, 'utf8')));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+            return {};
+        record = parsed;
     }
     catch {
         return {};
     }
+    const hasAgentSections = AGENTS.some((agent) => agent in record);
+    const legacy = hasAgentSections ? {} : sanitizeSavedSettings(record);
+    const byAgent = {};
+    for (const agent of AGENTS) {
+        const own = agent in record ? sanitizeSavedSettings(record[agent]) : legacy;
+        if (Object.keys(own).length > 0)
+            byAgent[agent] = own;
+    }
+    return byAgent;
+}
+async function writeSavedByAgent(path, byAgent) {
+    if (Object.keys(byAgent).length === 0) {
+        await rm(path, { force: true });
+        return;
+    }
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await writeFile(path, `${JSON.stringify(byAgent, null, 2)}\n`, { mode: 0o600 });
+    try {
+        await chmod(path, 0o600);
+    }
+    catch { }
+}
+function saved(env, agent) {
+    return { ...savedByAgent(settingsPath(env))[agent] };
 }
 function envNumber(env, keys) {
     for (const key of keys) {
@@ -65,8 +95,8 @@ const ENV_NAMES = {
 export function settingOverride(name, env = process.env) {
     return ENV_NAMES[name].find((key) => (env[key] ?? '').trim() !== '');
 }
-export function userSettings(env = process.env) {
-    const stored = saved(env);
+export function userSettings(env, agent) {
+    const stored = saved(env, agent);
     const rawMode = env.JEVCOMP_RESTORE_MODE;
     const modeFromEnv = normalizedMode(rawMode);
     // Codex compaction costs the same with or without jevcomp, so by default it adds back only the short list.
@@ -88,8 +118,8 @@ export function userSettings(env = process.env) {
         minReductionRatio: Math.min(1, Math.max(0, minReduction)),
     };
 }
-export async function setUserSetting(name, rawValue, env = process.env) {
-    const current = saved(env);
+export async function setUserSetting(name, rawValue, env, agent) {
+    const current = saved(env, agent);
     if (name === 'restore-mode') {
         const mode = normalizedMode(rawValue);
         if (!mode)
@@ -115,14 +145,12 @@ export async function setUserSetting(name, rawValue, env = process.env) {
             current.minReductionRatio = n;
     }
     const path = settingsPath(env);
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    await writeFile(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
-    try {
-        await chmod(path, 0o600);
-    }
-    catch { }
-    return userSettings(env);
+    await writeSavedByAgent(path, { ...savedByAgent(path), [agent]: current });
+    return userSettings(env, agent);
 }
-export async function resetUserSettings(env = process.env) {
-    await rm(settingsPath(env), { force: true });
+export async function resetUserSettings(env, agent) {
+    const path = settingsPath(env);
+    const byAgent = savedByAgent(path);
+    delete byAgent[agent];
+    await writeSavedByAgent(path, byAgent);
 }

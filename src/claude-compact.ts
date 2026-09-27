@@ -19,7 +19,7 @@ export async function compactForClaude(body: Record<string, unknown>, baseEnv: R
   const jev = jevCompactOptions(env);
   try {
     const result = await compactMessages(messages, jev);
-    const minimum = userSettings(env).minReductionRatio;
+    const minimum = userSettings(env, 'claude').minReductionRatio;
     if (reductionRatio(result) < minimum) {
       await tryAppendHistory({ ...row, provider: jev.provider, status: 'skipped', stats: result.stats, decisions: result.decisions, detail: `reduction below ${minimum}` }, env);
       return { apply: false, reason: `reduction below ${Math.round(minimum * 100)}%` };

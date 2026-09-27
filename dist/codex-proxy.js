@@ -219,7 +219,7 @@ async function localCompaction(body, env) {
         return undefined;
     const jev = jevCompactOptions(env);
     const result = await compactMessages(messages, jev);
-    if (reductionRatio(result) < userSettings(env).minReductionRatio)
+    if (reductionRatio(result) < userSettings(env, 'codex').minReductionRatio)
         return undefined;
     const summary = renderMessages(result.messages.filter((message) => message.role !== 'developer' && message.role !== 'system'));
     const outputTokens = estimateTokens(summary);

@@ -1,5 +1,5 @@
 import { type KeyStatus } from './provider.js';
-import { type SettingName } from './settings.js';
+import { type SettingName, type SettingsAgent } from './settings.js';
 import { type HookActivity } from './store.js';
 type Env = Record<string, string | undefined>;
 type Provider = 'openrouter' | 'typesafe';
@@ -16,7 +16,6 @@ export interface SettingsSnapshot {
     lastAgent: 'codex' | 'claude' | 'agy' | null;
     agents: {
         codex: {
-            kind: 'plugin' | 'command';
             hooks: {
                 installed: number;
                 total: number;
@@ -39,7 +38,7 @@ export interface SettingsSnapshot {
         lockedBy?: string;
     }>;
 }
-export declare function settingsSnapshot(env?: Env): Promise<SettingsSnapshot>;
+export declare function settingsSnapshot(env?: Env, agent?: SettingsAgent): Promise<SettingsSnapshot>;
 /** Applies one change sent by the settings page. */
-export declare function applySettingsChange(body: Record<string, unknown>, env?: Env): Promise<void>;
+export declare function applySettingsChange(body: Record<string, unknown>, env: Env, agent: SettingsAgent): Promise<void>;
 export {};
