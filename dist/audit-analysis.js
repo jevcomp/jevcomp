@@ -4,7 +4,7 @@ import { auditRoot, digest, readJson, unpackEvidence } from './audit-store.js';
 import { indexTranscript, sourceRecord, blockText } from './audit-sources.js';
 import { join } from 'node:path';
 import { estimateTokens } from './compact.js';
-import { renderMessages } from './render.js';
+import { codexCompactionReductionRatio, renderCodexCompactionSummary } from './codex-compaction.js';
 export function expectedAction(decision, manifest, dropLimit, truncateLimit) {
     if (decision.pinned)
         return 'keep';
@@ -290,11 +290,12 @@ export async function simulateAudit(env, analysis, dropLimit, truncateLimit, min
             }),
         })).filter(message => message.text.trim() || message.toolCalls.length || message.toolResults?.length);
         const chars = (messages) => messages.reduce((sum, message) => sum + message.text.length + message.toolCalls.reduce((n, call) => n + (typeof call.input === 'string' ? call.input : JSON.stringify(call.input) ?? String(call.input)).length, 0) + (message.toolResults ?? []).reduce((n, result) => n + result.output.length, 0), 0);
-        const before = chars(input), after = chars(proposed), reduction = before ? (before - after) / before : 0;
+        const before = chars(input), after = chars(proposed);
+        const reduction = manifest.agent === 'codex' ? codexCompactionReductionRatio(input, proposed) : before ? (before - after) / before : 0;
         let accepted = reduction >= (minimum ?? Number(manifest.settings.minReductionRatio));
         let rejection = accepted ? undefined : 'below_minimum';
         if (manifest.agent === 'codex') {
-            const summary = renderMessages(proposed.filter(message => message.role !== 'developer' && message.role !== 'system'));
+            const summary = renderCodexCompactionSummary(proposed);
             if (!summary.trim() || estimateTokens(summary) > Number(manifest.settings.maxSummaryTokens)) {
                 accepted = false;
                 rejection = 'host_output_constraint';

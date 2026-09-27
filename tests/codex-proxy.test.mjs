@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { isCodexCompactionRequest, startCodexProxy } from '../dist/codex-proxy.js';
+import { codexCompactionReductionRatio, renderCodexCompactionSummary } from '../dist/codex-compaction.js';
 import { configureAudit, auditRoot } from '../dist/audit-store.js';
 import { auditManifests } from '../dist/audit.js';
 
@@ -204,16 +205,64 @@ test('decompressed gzip and brotli responses omit content-encoding', async (t) =
   }
 });
 
-test('detects only the exact final Codex compaction prompt', () => {
+test('uses Codex turn metadata before the legacy compaction prompt fallback', () => {
   assert.equal(isCodexCompactionRequest(compactionFixture), true);
 
   const similar = structuredClone(compactionFixture);
   similar.input.at(-1).content[0].text += ' ';
   assert.equal(isCodexCompactionRequest(similar), false);
 
+  const metadataCompaction = structuredClone(similar);
+  metadataCompaction.client_metadata['x-codex-turn-metadata'] = JSON.stringify({
+    request_kind: 'compaction',
+    compaction: { implementation: 'responses' },
+  });
+  assert.equal(isCodexCompactionRequest(metadataCompaction), true);
+
+  const ordinaryTurn = structuredClone(compactionFixture);
+  ordinaryTurn.client_metadata['x-codex-turn-metadata'] = JSON.stringify({ request_kind: 'turn' });
+  assert.equal(isCodexCompactionRequest(ordinaryTurn), false);
+
+  const remoteV2 = structuredClone(compactionFixture);
+  remoteV2.client_metadata['x-codex-turn-metadata'] = JSON.stringify({
+    request_kind: 'compaction',
+    compaction: { implementation: 'responses_compaction_v2' },
+  });
+  assert.equal(isCodexCompactionRequest(remoteV2), false);
+
   const followedByAnotherItem = structuredClone(compactionFixture);
   followedByAnotherItem.input.push({ type: 'message', role: 'user', content: 'ordinary message' });
   assert.equal(isCodexCompactionRequest(followedByAnotherItem), false);
+});
+
+test('Codex summaries omit only user messages fully preserved by replacement history', () => {
+  const small = [
+    { role: 'user', text: 'binding user constraint', toolCalls: [] },
+    { role: 'assistant', text: 'assistant progress', toolCalls: [] },
+  ];
+  const smallSummary = renderCodexCompactionSummary(small);
+  assert.doesNotMatch(smallSummary, /binding user constraint/);
+  assert.match(smallSummary, /assistant progress/);
+
+  const oldConstraint = 'old user constraint that would otherwise be lost';
+  const recent = 'r'.repeat(80_000);
+  const overflow = [
+    { role: 'user', text: oldConstraint, toolCalls: [] },
+    { role: 'assistant', text: 'middle progress', toolCalls: [] },
+    { role: 'user', text: recent, toolCalls: [] },
+  ];
+  const overflowSummary = renderCodexCompactionSummary(overflow);
+  assert.match(overflowSummary, /old user constraint that would otherwise be lost/);
+  assert.equal(overflowSummary.includes(recent.slice(0, 200)), false);
+});
+
+test('Codex reduction ignores text that Codex preserves outside the synthetic summary', () => {
+  const hugeUser = { role: 'user', text: 'u'.repeat(40_000), toolCalls: [] };
+  const call = { role: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'read', input: { path: 'a' } }] };
+  const result = { role: 'tool', text: '', toolCalls: [], toolResults: [{ callId: 'c1', output: 'x'.repeat(4000) }] };
+  const before = [hugeUser, call, result];
+  const after = [hugeUser, call, { ...result, toolResults: [{ callId: 'c1', output: 'short' }] }];
+  assert.ok(codexCompactionReductionRatio(before, after) > 0.9);
 });
 
 test('answers a matching compact request with accepted SSE and records it in history', async (t) => {
@@ -261,7 +310,9 @@ test('answers a matching compact request with accepted SSE and records it in his
   assert.equal(events[1].data.item.type, 'message');
   assert.equal(events[1].data.item.role, 'assistant');
   assert.equal(events[1].data.item.content[0].type, 'output_text');
-  assert.match(events[1].data.item.content[0].text, /Fixture user request/);
+  assert.doesNotMatch(events[1].data.item.content[0].text, /Fixture user request/);
+  assert.match(events[1].data.item.content[0].text, /Fixture assistant response/);
+  assert.match(events[1].data.item.content[0].text, /Fixture tool output/);
   assert.ok(events[2].data.response.usage.output_tokens > 0);
   assert.equal(events[2].data.response.usage.total_tokens, events[2].data.response.usage.output_tokens);
   assert.equal(upstreamHit, false);

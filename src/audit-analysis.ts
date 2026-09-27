@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { Env } from './provider.js';
 import type { CallDecision, Message } from './types.js';
 import { estimateTokens } from './compact.js';
-import { renderMessages } from './render.js';
+import { codexCompactionReductionRatio, renderCodexCompactionSummary } from './codex-compaction.js';
 
 export interface AuditCase {
   id: string; evaluationId: string; callId: string; callKey: string; agent: string; tool: string;
@@ -237,11 +237,12 @@ export async function simulateAudit(env: Env, analysis: AuditAnalysis, dropLimit
       }),
     })).filter(message => message.text.trim() || message.toolCalls.length || message.toolResults?.length);
     const chars = (messages: Message[]) => messages.reduce((sum, message) => sum + message.text.length + message.toolCalls.reduce((n, call) => n + (typeof call.input === 'string' ? call.input : JSON.stringify(call.input) ?? String(call.input)).length, 0) + (message.toolResults ?? []).reduce((n, result) => n + result.output.length, 0), 0);
-    const before = chars(input), after = chars(proposed), reduction = before ? (before - after) / before : 0;
+    const before = chars(input), after = chars(proposed);
+    const reduction = manifest.agent === 'codex' ? codexCompactionReductionRatio(input, proposed) : before ? (before - after) / before : 0;
     let accepted = reduction >= (minimum ?? Number(manifest.settings.minReductionRatio));
     let rejection = accepted ? undefined : 'below_minimum';
     if (manifest.agent === 'codex') {
-      const summary = renderMessages(proposed.filter(message => message.role !== 'developer' && message.role !== 'system'));
+      const summary = renderCodexCompactionSummary(proposed);
       if (!summary.trim() || estimateTokens(summary) > Number(manifest.settings.maxSummaryTokens)) { accepted = false; rejection = 'host_output_constraint'; }
     }
     results.push({ id: manifest.id, before, after, reduction, accepted, rejection, changes: row.decisions.filter(decision => decisions.get(decision.callId) !== decision.action).map(decision => ({ callId: decision.callId, from: decision.action, to: decisions.get(decision.callId) })) });

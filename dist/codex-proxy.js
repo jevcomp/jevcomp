@@ -6,9 +6,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { launch } from './command.js';
-import { compactMessages, estimateTokens, reductionRatio } from './compact.js';
+import { compactMessages, estimateTokens } from './compact.js';
+import { codexCompactionReductionRatio, isCodexCompactionRequest, renderCodexCompactionSummary } from './codex-compaction.js';
 import { jevCompactOptions } from './hooks.js';
-import { renderMessages } from './render.js';
+export { isCodexCompactionRequest } from './codex-compaction.js';
 import { appendResponseItem } from './rollout.js';
 import { userSettings } from './settings.js';
 import { captureDirectory, tryAppendHistory } from './store.js';
@@ -139,31 +140,9 @@ function sendFailure(response, status, message) {
     response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' });
     response.end(message);
 }
-const CODEX_COMPACTION_PROMPT = [
-    'You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.',
-    '',
-    'Include:',
-    '- Current progress and key decisions made',
-    '- Important context, constraints, or user preferences',
-    '- What remains to be done (clear next steps)',
-    '- Any critical data, examples, or references needed to continue',
-    '',
-    'Be concise, structured, and focused on helping the next LLM seamlessly continue the work.',
-    '',
-].join('\n');
 const MAX_COMPACTION_SUMMARY_TOKENS = 18_000;
 function record(value) {
     return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-export function isCodexCompactionRequest(value) {
-    if (!record(value) || !Array.isArray(value.input) || value.input.length === 0)
-        return false;
-    const last = value.input[value.input.length - 1];
-    if (!record(last) || last.type !== 'message' || last.role !== 'user' || !Array.isArray(last.content) || last.content.length !== 1)
-        return false;
-    const content = last.content[0];
-    return record(content) && content.type === 'input_text' && typeof content.text === 'string'
-        && content.text.replace(/\r\n/g, '\n') === CODEX_COMPACTION_PROMPT;
 }
 function responseEvent(type, sequenceNumber, fields) {
     return `event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequenceNumber, ...fields })}\n\n`;
@@ -235,8 +214,8 @@ async function localCompaction(body, env) {
             return undefined;
         }
         const result = await compactMessages(messages, { ...jev, auditObserver: audit?.observe });
-        const belowMinimum = reductionRatio(result) < minimum;
-        const summary = belowMinimum ? '' : renderMessages(result.messages.filter(message => message.role !== 'developer' && message.role !== 'system'));
+        const belowMinimum = codexCompactionReductionRatio(messages, result.messages) < minimum;
+        const summary = belowMinimum ? '' : renderCodexCompactionSummary(result.messages);
         const outputTokens = belowMinimum ? 0 : estimateTokens(summary);
         const rejection = belowMinimum ? 'below_minimum' : !summary.trim() ? 'empty_output' : outputTokens > MAX_COMPACTION_SUMMARY_TOKENS ? 'output_too_large' : undefined;
         const recorded = await tryAppendHistory({ ...localRun, status: rejection ? 'skipped' : 'prepared', stats: result.stats, decisions: result.decisions, retainedChars: rejection ? undefined : summary.length, detail: rejection ?? 'Responses API compaction answered locally by Jev' }, env);
