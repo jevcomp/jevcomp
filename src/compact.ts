@@ -96,11 +96,22 @@ function resultPreview(text: string): string {
 }
 
 function collect(messages: readonly Message[], recent: number): Candidate[] {
-  const results = new Map<string, { index: number; result: ToolResult }>();
-  messages.forEach((m, i) => m.toolResults?.forEach((r) => results.set(r.callId, { index: i, result: r })));
+  const callCounts = new Map<string, number>();
+  const results = new Map<string, Array<{ index: number; result: ToolResult }>>();
+  messages.forEach((m, i) => {
+    for (const call of m.toolCalls) callCounts.set(call.id, (callCounts.get(call.id) ?? 0) + 1);
+    for (const result of m.toolResults ?? []) {
+      const entries = results.get(result.callId) ?? [];
+      entries.push({ index: i, result });
+      results.set(result.callId, entries);
+    }
+  });
   const out: Candidate[] = [];
   messages.forEach((m, callIndex) => m.toolCalls.forEach((call) => {
-    const found = results.get(call.id); if (!found) return;
+    const matches = results.get(call.id);
+    if (callCounts.get(call.id) !== 1 || matches?.length !== 1) return;
+    const found = matches[0]!;
+    if (found.index < callIndex) return;
     const inputText = stringify(call.input);
     out.push({ id: `t${out.length + 1}`, callId: call.id, name: call.name, input: call.input, inputText, inputPreview: inputPreviewFromText(inputText), callIndex, resultIndex: found.index,
       resultChars: found.result.output.length, resultPreview: resultPreview(found.result.output), isError: !!found.result.isError,

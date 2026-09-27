@@ -76,12 +76,24 @@ function resultPreview(text) {
     return `${text.slice(0, 280)}\n[… judgment preview omitted ${text.length - 420} chars …]\n${text.slice(-140)}`;
 }
 function collect(messages, recent) {
+    const callCounts = new Map();
     const results = new Map();
-    messages.forEach((m, i) => m.toolResults?.forEach((r) => results.set(r.callId, { index: i, result: r })));
+    messages.forEach((m, i) => {
+        for (const call of m.toolCalls)
+            callCounts.set(call.id, (callCounts.get(call.id) ?? 0) + 1);
+        for (const result of m.toolResults ?? []) {
+            const entries = results.get(result.callId) ?? [];
+            entries.push({ index: i, result });
+            results.set(result.callId, entries);
+        }
+    });
     const out = [];
     messages.forEach((m, callIndex) => m.toolCalls.forEach((call) => {
-        const found = results.get(call.id);
-        if (!found)
+        const matches = results.get(call.id);
+        if (callCounts.get(call.id) !== 1 || matches?.length !== 1)
+            return;
+        const found = matches[0];
+        if (found.index < callIndex)
             return;
         const inputText = stringify(call.input);
         out.push({ id: `t${out.length + 1}`, callId: call.id, name: call.name, input: call.input, inputText, inputPreview: inputPreviewFromText(inputText), callIndex, resultIndex: found.index,

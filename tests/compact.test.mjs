@@ -80,6 +80,38 @@ test('conservative ordering keeps full result when truncate-loss is high even if
 });
 
 
+test('duplicate and unmatched call ids are never judged or rewritten', async () => {
+  const duplicateResult = 'duplicate evidence '.repeat(40);
+  const validResult = 'valid evidence '.repeat(40);
+  const messages = [
+    { role: 'user', text: 'task', toolCalls: [] },
+    { role: 'assistant', text: '', toolCalls: [
+      { id: 'dup', name: 'read', input: { path: 'a' } },
+      { id: 'dup', name: 'read', input: { path: 'b' } },
+      { id: 'valid', name: 'read', input: { path: 'c' } },
+      { id: 'missing', name: 'read', input: { path: 'd' } },
+    ] },
+    { role: 'tool', text: '', toolCalls: [], toolResults: [
+      { callId: 'dup', output: duplicateResult },
+      { callId: 'valid', output: validResult },
+    ] },
+    { role: 'assistant', text: 'continue', toolCalls: [] },
+  ];
+  let questionKeys = [];
+  const result = await compact(messages, { async ask(_state, questions) {
+    questionKeys = Object.keys(questions);
+    return { answers: Object.fromEntries(questionKeys.map((key) => [key, { noul: 0.1 }])) };
+  } }, { preserveRecentMessages: 0 });
+
+  assert.equal(result.stats.calls, 1);
+  assert.equal(result.decisions.length, 1);
+  assert.equal(result.decisions[0].callId, 'valid');
+  assert.equal(questionKeys.some((key) => key.includes('dup')), false);
+  assert.equal(result.messages.flatMap((m) => m.toolCalls).filter((call) => call.id === 'dup').length, 2);
+  assert.equal(result.messages.flatMap((m) => m.toolResults ?? []).find((item) => item.callId === 'dup').output, duplicateResult);
+  assert.equal(result.messages.flatMap((m) => m.toolCalls).some((call) => call.id === 'missing'), true);
+});
+
 test('allocation-free token estimator matches the previous estimator on JSON-heavy text', () => {
   const samples = [
     '', 'hello world', '{"a":123,"b":"x-y_z"}', 'line 1\nline 2\t42',
