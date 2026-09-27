@@ -191,22 +191,19 @@ function printSettings(agent) {
 }
 async function saveKey(provider) {
     const label = provider === 'typesafe' ? 'TypeSafe' : 'OpenRouter';
-    const saved = hasSavedProviderKey(provider, process.env);
-    if (saved && !interactive())
-        return;
-    const key = await secret(`${label} API key${saved ? ' (Enter keeps the saved key)' : ''}: `);
-    if (key) {
-        await saveProviderConfiguration(provider, key, process.env);
-        console.log(`${label} key saved.`);
+    if (hasSavedProviderKey(provider, process.env)) {
+        console.log(`Using the saved ${label} key.`);
         return;
     }
-    if (saved)
-        return;
     if (resolveApiKey(provider, { env: process.env })) {
-        console.log(`Using the ${label} key from this terminal's environment; Codex opened elsewhere may not see it.`);
+        console.log(`Using the ${label} key from your system variables.`);
         return;
     }
-    throw new Error(`${label} API key is required`);
+    const key = await secret(`${label} API key: `);
+    if (!key)
+        throw new Error(`${label} API key is required`);
+    await saveProviderConfiguration(provider, key, process.env);
+    console.log(`${label} key saved.`);
 }
 async function install(args) {
     const agents = await chooseAgents(args);
