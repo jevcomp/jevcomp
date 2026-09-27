@@ -178,6 +178,27 @@ test('truncate decision reports exactly the characters actually removed', async 
   assert.equal(result.stats.charsBefore - result.stats.charsAfter, result.decisions[0].savedChars);
 });
 
+test('shortened results retain both diagnostic head and tail', async () => {
+  const output = `COMMAND START\n${'middle noise\n'.repeat(100)}FAIL: checkout mismatch\nexit code 1`;
+  const messages = [
+    { role: 'user', text: 'task', toolCalls: [] },
+    { role: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'shell', input: { cmd: 'test' } }] },
+    { role: 'tool', text: '', toolCalls: [], toolResults: [{ callId: 'c1', output }] },
+    { role: 'assistant', text: 'continue', toolCalls: [] },
+  ];
+  const result = await compact(messages, { async ask(_state, questions) {
+    return { answers: Object.fromEntries(Object.keys(questions).map((key) => [key, { noul: key.startsWith('drop_') ? 0.9 : 0.1 }])) };
+  } }, { preserveRecentMessages: 0, truncateHeadChars: 80, truncateTailChars: 80 });
+  const after = result.messages.flatMap((m) => m.toolResults ?? []).find((r) => r.callId === 'c1').output;
+  assert.equal(result.decisions[0].action, 'truncate_result');
+  assert.ok(after.startsWith(output.slice(0, 80)));
+  assert.ok(after.endsWith(output.slice(-80)));
+  assert.match(after, /jevcomp omitted/);
+  assert.match(after, /FAIL: checkout mismatch/);
+  assert.match(after, /exit code 1/);
+  assert.equal(result.decisions[0].savedChars, output.length - after.length);
+});
+
 test('does not claim a truncate when the omission marker would save nothing', async () => {
   const output = 'x'.repeat(320);
   const messages = [

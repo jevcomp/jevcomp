@@ -12,9 +12,12 @@ export interface CompactOptions {
     maxStateTokens?: number;
     maxRequestTokens?: number;
     truncateHeadChars?: number;
+    truncateTailChars?: number;
     maxConcurrentRequests?: number;
 }
 export declare function estimateTokens(text: string): number;
+export declare function shortenToolResult(text: string, head: number, tail: number): string;
+export declare function shortenedResultLength(originalChars: number, head: number, tail: number): number;
 export declare function reductionRatio(r: Pick<CompactResult, 'stats'>): number;
 export declare function compact(messages: readonly Message[], asker: JevAsker, input?: CompactOptions): Promise<CompactResult>;
 export declare function compactMessages(messages: readonly Message[], opts?: CompactOptions & JevClientOptions): Promise<CompactResult>;

@@ -22,7 +22,7 @@ export interface AuditManifest {
   mode: AuditMode;
   version: string;
   build: string;
-  policy: 'conservative-prefix-v1';
+  policy: 'conservative-prefix-v1' | 'conservative-head-tail-v2';
   stage: 'started' | 'evaluated' | 'result_produced' | 'rejected' | 'failed';
   reason?: string;
   historyRecorded?: boolean;
@@ -41,7 +41,7 @@ export interface AuditManifest {
 
 let buildIdentity: Promise<string> | undefined;
 function buildHash(): Promise<string> {
-  return buildIdentity ??= Promise.all(['compact.js', 'provider.js', 'claude.js', 'claude-compact.js', 'codex-proxy.js', 'render.js', 'audit.js'].map(async name => {
+  return buildIdentity ??= Promise.all(['compact.js', 'provider.js', 'claude.js', 'claude-compact.js', 'codex-proxy.js', 'codex-compaction.js', 'render.js', 'audit.js'].map(async name => {
     try { return await readFile(fileURLToPath(new URL(name, import.meta.url)), 'utf8'); }
     catch { return `${name}:unavailable`; }
   })).then(parts => digest(parts.join('\n')));
@@ -147,7 +147,7 @@ export async function beginAudit(env: Env, agent: AuditAgent, id: string, messag
     }));
     const manifest: AuditManifest = {
       schema: 1, id, agent, sessionId, agentId, sessionSource: sessionId ? 'native' : 'unknown', transcript, transcriptOffset,
-      startedAt: new Date().toISOString(), mode, version: VERSION, build: await buildHash(), policy: 'conservative-prefix-v1', stage: 'started',
+      startedAt: new Date().toISOString(), mode, version: VERSION, build: await buildHash(), policy: 'conservative-head-tail-v2', stage: 'started',
       settings, hashes: {}, references: {}, batches: [], attempts: [], calls, gaps: [], beginMs: 0, captureMs: 0, observedInputHash: messageHash(messages),
     };
     if (!sessionId) manifest.gaps.push('native session identity unavailable');

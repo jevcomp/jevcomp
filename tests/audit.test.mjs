@@ -25,6 +25,14 @@ test('invalid scores remain unauditable instead of appearing policy compliant', 
   assert.equal(expectedAction(decision, manifest), undefined);
 });
 
+test('historical prefix-only manifests keep their original shortening policy', () => {
+  const decision = { pinned: false, dropLoss: 0.9, truncateLoss: 0.1, resultChars: 420 };
+  const historical = { settings: { lossThreshold: 0.5, truncateHeadChars: 300 } };
+  const current = { settings: { lossThreshold: 0.5, truncateHeadChars: 300, truncateTailChars: 100 } };
+  assert.equal(expectedAction(decision, historical), 'truncate_result');
+  assert.equal(expectedAction(decision, current), 'keep');
+});
+
 async function setup(mode = 'evidence') {
   const root = await mkdtemp(join(tmpdir(), 'jev-audit-'));
   const env = { JEVCOMP_DATA_DIR: root };

@@ -5,7 +5,7 @@ import { VERSION } from './version.js';
 import { auditConfig, auditRoot, atomicJson, digest, EvidenceGraph, persistGraph, readJson, reserveBytes, validId, withAuditLock } from './audit-store.js';
 let buildIdentity;
 function buildHash() {
-    return buildIdentity ??= Promise.all(['compact.js', 'provider.js', 'claude.js', 'claude-compact.js', 'codex-proxy.js', 'render.js', 'audit.js'].map(async (name) => {
+    return buildIdentity ??= Promise.all(['compact.js', 'provider.js', 'claude.js', 'claude-compact.js', 'codex-proxy.js', 'codex-compaction.js', 'render.js', 'audit.js'].map(async (name) => {
         try {
             return await readFile(fileURLToPath(new URL(name, import.meta.url)), 'utf8');
         }
@@ -145,7 +145,7 @@ export async function beginAudit(env, agent, id, messages, settings, sessionId, 
         }));
         const manifest = {
             schema: 1, id, agent, sessionId, agentId, sessionSource: sessionId ? 'native' : 'unknown', transcript, transcriptOffset,
-            startedAt: new Date().toISOString(), mode, version: VERSION, build: await buildHash(), policy: 'conservative-prefix-v1', stage: 'started',
+            startedAt: new Date().toISOString(), mode, version: VERSION, build: await buildHash(), policy: 'conservative-head-tail-v2', stage: 'started',
             settings, hashes: {}, references: {}, batches: [], attempts: [], calls, gaps: [], beginMs: 0, captureMs: 0, observedInputHash: messageHash(messages),
         };
         if (!sessionId)

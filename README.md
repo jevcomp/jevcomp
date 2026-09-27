@@ -106,7 +106,8 @@ Rarely needed; set them as environment variables.
 | `JEVCOMP_CONCURRENCY` | `4` | Jev requests at the same time. |
 | `JEVCOMP_MAX_STATE_TOKENS` | `24000` | Size of the conversation copy shown to Jev. |
 | `JEVCOMP_MAX_REQUEST_TOKENS` | `30000` | Size of one Jev request. |
-| `JEVCOMP_TRUNCATE_HEAD_CHARS` | `300` | Characters kept when an output is shortened. |
+| `JEVCOMP_TRUNCATE_HEAD_CHARS` | `300` | Leading characters kept when an output is shortened. |
+| `JEVCOMP_TRUNCATE_TAIL_CHARS` | `100` | Trailing characters kept when an output is shortened. |
 | `JEVCOMP_TIMEOUT_MS` | `20000` | Time limit for one Jev request. |
 | `JEVCOMP_RETRIES` | `1` | Retries after a network failure. |
 | `JEVCOMP_GOAL` | automatic | Task description given to Jev instead of your recent messages. |

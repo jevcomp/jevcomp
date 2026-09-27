@@ -63,6 +63,7 @@ export function jevCompactOptions(env: Record<string, string | undefined>, agent
     maxStateTokens: Math.max(1_000, num(env, 'JEVCOMP_MAX_STATE_TOKENS', 24_000)),
     maxRequestTokens: Math.max(2_000, num(env, 'JEVCOMP_MAX_REQUEST_TOKENS', 30_000)),
     truncateHeadChars: Math.max(0, num(env, 'JEVCOMP_TRUNCATE_HEAD_CHARS', 300)),
+    truncateTailChars: Math.max(0, num(env, 'JEVCOMP_TRUNCATE_TAIL_CHARS', 100)),
     maxConcurrentRequests: Math.max(1, num(env, 'JEVCOMP_CONCURRENCY', 4)),
     timeoutMs: Math.max(1, num(env, 'JEVCOMP_TIMEOUT_MS', 20_000)),
     retries: Math.max(0, num(env, 'JEVCOMP_RETRIES', 1)),

@@ -16,7 +16,7 @@ export interface AuditManifest {
     mode: AuditMode;
     version: string;
     build: string;
-    policy: 'conservative-prefix-v1';
+    policy: 'conservative-prefix-v1' | 'conservative-head-tail-v2';
     stage: 'started' | 'evaluated' | 'result_produced' | 'rejected' | 'failed';
     reason?: string;
     historyRecorded?: boolean;

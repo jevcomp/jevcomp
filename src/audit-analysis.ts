@@ -5,7 +5,7 @@ import { indexTranscript, sourceRecord, blockText, type SourceIndex, type Source
 import { join } from 'node:path';
 import type { Env } from './provider.js';
 import type { CallDecision, Message } from './types.js';
-import { estimateTokens } from './compact.js';
+import { estimateTokens, shortenToolResult, shortenedResultLength } from './compact.js';
 import { codexCompactionReductionRatio, renderCodexCompactionSummary } from './codex-compaction.js';
 
 export interface AuditCase {
@@ -26,16 +26,21 @@ export function expectedAction(decision: CallDecision, manifest: AuditManifest, 
   if (![decision.dropLoss, decision.truncateLoss].every(value => Number.isFinite(value) && value >= 0 && value <= 1) || !Number.isSafeInteger(decision.resultChars) || decision.resultChars < 0) return undefined;
   const limit = Number(manifest.settings.lossThreshold);
   const head = Number(manifest.settings.truncateHeadChars);
+  const tail = manifestTailChars(manifest);
   if (!Number.isFinite(limit) || !Number.isInteger(head)) return undefined;
   const drop = dropLimit ?? limit, truncate = truncateLimit ?? limit;
   if (decision.truncateLoss >= truncate) return 'keep';
   if (decision.dropLoss < drop) return 'drop_call';
-  return shortenedLength(decision.resultChars, head) < decision.resultChars ? 'truncate_result' : 'keep';
+  return shortenedLength(decision.resultChars, head, tail) < decision.resultChars ? 'truncate_result' : 'keep';
 }
 
-export function shortenedLength(length: number, head: number): number {
-  if (length <= head) return length;
-  return (head ? head + 1 : 0) + `[jevcomp omitted ${length - head} chars; rerun tool if needed]`.length;
+function manifestTailChars(manifest: AuditManifest): number {
+  const value = Number(manifest.settings.truncateTailChars);
+  return Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+export function shortenedLength(length: number, head: number, tail = 0): number {
+  return shortenedResultLength(length, head, tail);
 }
 
 async function outputMessages(env: Env, manifest: AuditManifest, key: 'input' | 'output'): Promise<Message[] | undefined> {
@@ -63,8 +68,9 @@ async function applicationEvidence(env: Env, manifest: AuditManifest, source: So
   return 'unconfirmed';
 }
 
-function excerpts(output: string, head = 0): string[] {
-  const remainder = output.slice(head);
+function excerpts(output: string, head = 0, tail = 0): string[] {
+  const end = tail > 0 ? Math.max(head, output.length - tail) : output.length;
+  const remainder = output.slice(head, end);
   if (remainder.length < 80) return [];
   const positions = [0, Math.floor(remainder.length / 3), Math.floor(remainder.length * 2 / 3), Math.max(0, remainder.length - 80)];
   return [...new Set(positions.map(position => remainder.slice(position, position + 80)).filter(part => new Set(part).size > 8))];
@@ -82,7 +88,8 @@ async function observations(source: SourceIndex | undefined, manifest: AuditMani
   const originalOutputs = original?.flatMap(message => message.toolResults ?? []).filter(result => result.callId === decision.callId).map(result => result.output) ?? [];
   if (originalOutputs.length && decision.action !== 'drop_call') {
     const head = decision.action === 'truncate_result' ? Number(manifest.settings.truncateHeadChars) : 0;
-    const needles = originalOutputs.flatMap(output => excerpts(output, head));
+    const tail = decision.action === 'truncate_result' ? manifestTailChars(manifest) : 0;
+    const needles = originalOutputs.flatMap(output => excerpts(output, head, tail));
     let scanned = 0;
     for (const event of after) {
       if (scanned >= 1024 * 1024 || matches.length >= 5) break;
@@ -167,7 +174,7 @@ export function auditReport(analysis: AuditAnalysis, seed = 'jev-audit-v1', limi
   for (const item of ordered) add(item, 'seeded_random_fill');
   const eligible = nonPinned.filter(item => {
     const manifest = manifests.find(manifest => manifest.id === item.evaluationId)!;
-    return shortenedLength(item.resultChars, Number(manifest.settings.truncateHeadChars)) < item.resultChars;
+    return shortenedLength(item.resultChars, Number(manifest.settings.truncateHeadChars), manifestTailChars(manifest)) < item.resultChars;
   });
   return {
     schema: 1, generatedAt: new Date().toISOString(), units: { text: 'UTF-16 code units (same as compactor String.length)', continuation: 'unique assistant messages; not billed requests' },
@@ -216,7 +223,7 @@ export async function inspectAuditCase(env: Env, analysis: AuditAnalysis, id: st
   const evaluation = { id: manifest.id, agent: manifest.agent, sessionId: manifest.sessionId, startedAt: manifest.startedAt, stage: manifest.stage,
     reason: manifest.reason, settings: manifest.settings, version: manifest.version, build: manifest.build, policy: manifest.policy, gaps: manifest.gaps };
   return { case: selected, evaluation, before: relevant(input), after: relevant(output), nearbyMessages, jevContext: { instructions: jevState?.context, goal: jevState?.goal, matchingEntries: observedJevContext, fullStateReference: manifest.references.state }, later, review, evidenceAvailable: !!input && !!output,
-    reviewQuestions: ['Was information needed at this point or only later?', 'Was it available elsewhere?', 'Was recovery acceptable?', 'Would the original prefix suffice?', 'Is there observed harm or only a hypothesis?', 'Which evidence is missing?'] };
+    reviewQuestions: ['Was information needed at this point or only later?', 'Was it available elsewhere?', 'Was recovery acceptable?', 'Would the retained head and tail suffice?', 'Is there observed harm or only a hypothesis?', 'Which evidence is missing?'] };
 }
 
 export async function simulateAudit(env: Env, analysis: AuditAnalysis, dropLimit: number, truncateLimit: number, minimum?: number) {
@@ -227,13 +234,14 @@ export async function simulateAudit(env: Env, analysis: AuditAnalysis, dropLimit
     const row = analysis.rows.get(manifest.id);
     if (!input || !row?.decisions || manifest.gaps.some(gap => gap.includes('duplicate'))) { results.push({ id: manifest.id, status: 'insufficient_evidence' }); continue; }
     const head = Number(manifest.settings.truncateHeadChars);
+    const tail = manifestTailChars(manifest);
     const decisions = new Map(row.decisions.map(decision => [decision.callId, expectedAction(decision, manifest, dropLimit, truncateLimit)]));
     if ([...decisions.values()].some(action => !action)) { results.push({ id: manifest.id, status: 'unsupported_settings' }); continue; }
     const proposed: Message[] = input.map(message => ({ ...message,
       toolCalls: message.toolCalls.filter(call => decisions.get(call.id) !== 'drop_call'),
       toolResults: message.toolResults?.filter(result => decisions.get(result.callId) !== 'drop_call').map(result => {
-        if (decisions.get(result.callId) !== 'truncate_result' || shortenedLength(result.output.length, head) >= result.output.length) return result;
-        return { ...result, output: `${head ? result.output.slice(0, head) + '\n' : ''}[jevcomp omitted ${Math.max(0, result.output.length - head)} chars; rerun tool if needed]` };
+        if (decisions.get(result.callId) !== 'truncate_result' || shortenedLength(result.output.length, head, tail) >= result.output.length) return result;
+        return { ...result, output: shortenToolResult(result.output, head, tail) };
       }),
     })).filter(message => message.text.trim() || message.toolCalls.length || message.toolResults?.length);
     const chars = (messages: Message[]) => messages.reduce((sum, message) => sum + message.text.length + message.toolCalls.reduce((n, call) => n + (typeof call.input === 'string' ? call.input : JSON.stringify(call.input) ?? String(call.input)).length, 0) + (message.toolResults ?? []).reduce((n, result) => n + result.output.length, 0), 0);

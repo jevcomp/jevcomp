@@ -14,6 +14,7 @@ export declare function jevCompactOptions(env: Record<string, string | undefined
     maxStateTokens: number;
     maxRequestTokens: number;
     truncateHeadChars: number;
+    truncateTailChars: number;
     maxConcurrentRequests: number;
     timeoutMs: number;
     retries: number;
