@@ -16,12 +16,12 @@ async function freePort() {
   return port;
 }
 
-test('plugin session start opens one shared dashboard and later prompts reuse it', async (t) => {
+test('Claude plugin session start opens one shared dashboard and later prompts reuse it', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'jev-dashboard-service-'));
   const port = await freePort();
   const env = {
     ...process.env,
-    PLUGIN_ROOT: join(root, 'plugin'),
+    CLAUDE_PLUGIN_ROOT: join(root, 'plugin'),
     JEVCOMP_DATA_DIR: join(root, 'data'),
     CODEX_HOME: join(root, 'codex-home'),
     JEVCOMP_CONFIG_DIR: join(root, 'config'),

@@ -40,12 +40,8 @@ interface RunSummary {
   jevOutputTokens: number;
   jevUsageReportedRequests: number;
   selectionMs: number;
-  restoreMode?: string;
   injectedPayloadChars?: number;
   retainedChars?: number;
-  nativePresentChars?: number;
-  restoreCandidateChars?: number;
-  membershipStatus?: string;
   detail?: string;
 }
 
@@ -124,9 +120,6 @@ export async function stats(env = process.env, agent?: 'codex' | 'claude' | 'agy
   const injectedPayloadChars = restored.reduce((n, r) => n + positive(r.injectedPayloadChars), 0);
   const restoreEligibleChars = restored.reduce((n, r) => n + positive(r.retainedChars), 0);
   const restoreCharsNotInjected = Math.max(0, restoreEligibleChars - injectedPayloadChars);
-  const nativePresentChars = restored.reduce((n, r) => n + positive(r.nativePresentChars), 0);
-  const restoreCandidateChars = restored.reduce((n, r) => n + positive(r.restoreCandidateChars), 0);
-  const verifiedMemberships = restored.filter((r) => r.membershipStatus === 'verified').length;
   // A skip happens after Jev has already judged the transcript, so its provider
   // usage is real cost even though no retained sidecar is applied.
   const scored = [...prepared, ...skipped].filter((r) => r.stats);
@@ -219,12 +212,8 @@ export async function stats(env = process.env, agent?: 'codex' | 'claude' | 'agy
       jevOutputTokens: positive(s?.jevOutputTokens),
       jevUsageReportedRequests: Number.isFinite(s?.jevUsageReportedRequests) ? positive(s?.jevUsageReportedRequests) : ((positive(s?.jevInputTokens) + positive(s?.jevOutputTokens)) > 0 ? positive(s?.requests) : 0),
       selectionMs: positive(s?.ms),
-      restoreMode: restore?.restoreMode,
       injectedPayloadChars: restore?.injectedPayloadChars,
       retainedChars: restore?.retainedChars ?? row.retainedChars,
-      nativePresentChars: restore?.nativePresentChars,
-      restoreCandidateChars: restore?.restoreCandidateChars,
-      membershipStatus: restore?.membershipStatus,
       detail: restoreFailure?.detail ?? row.detail,
     });
   }
@@ -272,9 +261,6 @@ export async function stats(env = process.env, agent?: 'codex' | 'claude' | 'agy
     injectedPayloadChars,
     restoreEligibleChars,
     restoreCharsNotInjected,
-    nativePresentChars,
-    restoreCandidateChars,
-    verifiedMemberships,
     jevInputTokens,
     jevOutputTokens,
     jevRequests,
@@ -596,8 +582,6 @@ fetch('/api/settings',{cache:'no-store'}).then(r=>r.json()).then(s=>{
 setInterval(()=>refresh().catch(showError),5000);
 
 const SETTING_TEXT={
- 'restore-mode':{codexOnly:true,title:'Quanto texto enviar ao Codex',help:'Depois da compactação, o jevcomp envia ao Codex o que o resumo perdeu. Todo o texto: envia tudo, até o limite abaixo. Parte do texto: envia a lista e um trecho. Só a lista: envia apenas os nomes dos comandos e arquivos guardados e onde estão salvos no seu computador; o Codex abre o texto completo só se precisar.',label:v=>({preserve:'Todo o texto',balanced:'Parte do texto',minimal:'Só a lista'})[v]||v},
- 'restore-max-chars':{codexOnly:true,title:'Limite de texto enviado ao Codex',help:'O máximo de texto que o jevcomp envia ao Codex depois de cada compactação, em caracteres. Mais alto mantém mais detalhes, mas ocupa mais espaço na conversa.',label:v=>Number(v)===0?'Sem limite':f(Number(v)/1000)+'k',numbers:true},
  'pin-recent-messages':{title:'Mensagens recentes que nunca são cortadas',help:'As mensagens mais novas ficam sempre inteiras. Mais alto é mais seguro; mais baixo deixa o jevcomp cortar mais.',label:v=>String(v),numbers:true},
  'loss-threshold':{title:'Quanto cortar',help:'O Jev estima o risco de cortar algo que AGENT ainda vai usar. Pouco: só corta o que tem risco baixo. Muito: corta mais.',label:v=>({0.3:'Pouco',0.5:'Normal',0.7:'Muito'})[Number(v)]||String(v)},
  'min-reduction-ratio':{title:'Só agir se cortar pelo menos',help:'Se o corte diminuir o texto menos que isso, o jevcomp não faz nada naquela compactação.',label:v=>Math.round(Number(v)*100)+'%',numbers:true}
@@ -629,10 +613,9 @@ function renderSettings(s){
  const version=' · '+esc(s.version),codex=agent==='codex'&&s.agents.codex,claude=agent==='claude'&&s.agents.claude;
  let cards='';
  if(codex){
-  const latest=Object.values(codex.hooks.activity||{}).sort().pop();
   cards+=card('Codex','Como o jevcomp está ligado ao Codex',info('Instalação','Comando jevcomp'+version)
-   +'<div class="info"><span>Hooks</span><span class="pill '+(codex.hooks.installed>=codex.hooks.total?'ok':'fail')+'">'+codex.hooks.installed+' de '+codex.hooks.total+' instalados</span></div>'
-   +info('Último sinal dos hooks',latest?esc(ago(latest)):'Ainda nenhum'));
+   +info('Uso','jevcomp codex')
+   +info('Última compactação',codex.lastRun?esc(ago(codex.lastRun)):'Ainda nenhuma'));
  }
  if(claude)cards+=card('Claude Code','Como o jevcomp está ligado ao Claude Code',info('Instalação','Plugin do Claude Code'+version)
   +'<div class="info"><span>Compactação pelo jevcomp</span><span class="pill '+(claude.functionHooks?'ok':'fail')+'">'+(claude.functionHooks?'Ligada':'Desligada')+'</span></div>'

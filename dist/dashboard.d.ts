@@ -31,12 +31,8 @@ interface RunSummary {
     jevOutputTokens: number;
     jevUsageReportedRequests: number;
     selectionMs: number;
-    restoreMode?: string;
     injectedPayloadChars?: number;
     retainedChars?: number;
-    nativePresentChars?: number;
-    restoreCandidateChars?: number;
-    membershipStatus?: string;
     detail?: string;
 }
 /** Blocks keep transcript order, oldest first, so the chart reads left to right like the conversation. */
@@ -79,9 +75,6 @@ export declare function stats(env?: Record<string, string | undefined>, agent?: 
     injectedPayloadChars: number;
     restoreEligibleChars: number;
     restoreCharsNotInjected: number;
-    nativePresentChars: number;
-    restoreCandidateChars: number;
-    verifiedMemberships: number;
     jevInputTokens: number;
     jevOutputTokens: number;
     jevRequests: number;

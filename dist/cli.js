@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
+import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { dirname, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compactForClaude } from './claude-compact.js';
 import { runCodex } from './codex-proxy.js';
@@ -14,7 +15,7 @@ import { dashboardInstancePath, dashboardPort, ensureDashboard, restartDashboard
 import { enableFunctionHooks, handleHook } from './hooks.js';
 import { resetUserSettings, setUserSetting, userSettings } from './settings.js';
 import { describeSettings, runSettingsMenu, SETTINGS_ITEMS } from './settings-menu.js';
-import { inspectHooks, installHooks, installRuntime, runtimeDir, uninstallHooks } from './install.js';
+import { removeLegacyHooks, runtimeDir } from './install.js';
 import { adoptLegacyEnvironment, migrateLegacyConfig } from './legacy.js';
 import { configDir, hasSavedProviderKey, providerConfig, resolveApiKey, resolveProvider, saveProviderConfiguration } from './provider.js';
 import { renderMessages } from './render.js';
@@ -167,7 +168,8 @@ async function secret(prompt) {
 async function readiness() {
     const provider = resolveProvider({ provider: process.env.JEVCOMP_PROVIDER, env: process.env });
     const config = providerConfig({ provider, env: process.env });
-    const hooks = await inspectHooks(process.env);
+    const marker = join(configDir(process.env), 'codex-installed');
+    const codexInstalled = existsSync(marker);
     const settings = userSettings(process.env, 'codex');
     return {
         node: process.version ?? 'unknown',
@@ -175,9 +177,7 @@ async function readiness() {
         apiKeyConfigured: !!resolveApiKey(provider, { env: process.env }),
         model: config.model,
         baseUrl: config.baseUrl,
-        hooksInstalled: hooks.installed,
-        hookEvents: hooks.events,
-        hooksFile: hooks.path,
+        codexInstalled,
         dataDir: dataDir(process.env),
         dashboardUrl: (await runningDashboard(dashboardPort(process.env), process.env))?.url ?? null,
         settings,
@@ -210,23 +210,33 @@ async function saveKey(provider) {
 }
 async function install(args) {
     const agents = await chooseAgents(args);
-    if (agents.includes('agy'))
-        await installAgyCa();
-    if (agents.every((agent) => agent === 'agy'))
-        return;
-    const provider = await chooseProvider(args.find((arg) => !['codex', 'claude', 'agy', 'all', 'both'].includes(arg)));
-    await saveKey(provider);
+    if (agents.some((agent) => agent !== 'agy')) {
+        const provider = await chooseProvider(args.find((arg) => !['codex', 'claude', 'agy', 'all', 'both'].includes(arg)));
+        await saveKey(provider);
+    }
     if (agents.includes('claude'))
         await installClaude();
-    if (!agents.includes('codex')) {
-        console.log(`Dashboard: ${dashboardAddress()} (opens with each Claude Code session)`);
-        return;
+    if (agents.includes('codex')) {
+        await removeLegacyHooks(process.env);
+        await rm(runtimeDir(process.env), { recursive: true, force: true });
+        await mkdir(configDir(process.env), { recursive: true, mode: 0o700 });
+        await writeFile(join(configDir(process.env), 'codex-installed'), '');
+        console.log('Connected to Codex. Start it with `jevcomp codex`.');
     }
-    const runtimeCli = await installRuntime(fileURLToPath(import.meta.url), process.env);
-    await installHooks(runtimeCli);
-    console.log('Connected to Codex. Start it with `jevcomp codex` to save tokens; plain `codex` only runs the hooks.');
-    console.log('On the first start, type /hooks and approve the four jevcomp hooks.');
-    console.log(`Dashboard: ${dashboardAddress()} (opens with each ${agents.filter((agent) => agent !== 'agy').map((agent) => AGENT_NAMES[agent]).join(' or ')} session)`);
+    // Last, so a refused Windows certificate prompt cannot stop the other agents from installing.
+    if (agents.includes('agy')) {
+        try {
+            await installAgyCa();
+            console.log('Connected to Antigravity. Start it with `jevcomp agy`.');
+        }
+        catch (error) {
+            process.exitCode = 1;
+            console.error(`Antigravity was not installed: the certificate was not accepted (${error instanceof Error ? error.message : String(error)}). Run \`jevcomp install agy\` to try again.`);
+        }
+    }
+    const sessions = agents.filter((agent) => agent !== 'agy').map((agent) => AGENT_NAMES[agent]).join(' or ');
+    if (sessions)
+        console.log(`Dashboard: ${dashboardAddress()} (opens with each ${sessions} session)`);
 }
 async function uninstall(args) {
     if (args.includes('agy') || args.includes('all') || !args.length)
@@ -236,7 +246,8 @@ async function uninstall(args) {
     args = args.filter((arg) => arg !== 'agy');
     const agents = agentArgs(args) ?? ['codex', 'claude'];
     const claudeInstalled = claudePluginInstalled();
-    const codexStays = !agents.includes('codex') && (await inspectHooks(process.env)).installed;
+    const codexMarker = join(configDir(process.env), 'codex-installed');
+    const codexStays = !agents.includes('codex') && existsSync(codexMarker);
     // The dashboard serves both agents, so it keeps running while one of them still uses jevcomp.
     if (!codexStays && !(claudeInstalled && !agents.includes('claude')))
         await stopDashboard(dashboardPort(process.env), process.env);
@@ -249,8 +260,9 @@ async function uninstall(args) {
         console.log(`Kept your key and settings: ${configDir(process.env)}`);
         return;
     }
-    await uninstallHooks();
+    await removeLegacyHooks();
     await rm(runtimeDir(process.env), { recursive: true, force: true });
+    await rm(codexMarker, { force: true });
     console.log('jevcomp was removed from Codex.');
     console.log(`Kept your key and settings: ${configDir(process.env)}`);
     console.log(`Kept your history: ${dataDir(process.env)}`);
@@ -315,17 +327,13 @@ async function main() {
         }
         console.log(`jevcomp doctor\n`);
         console.log(`${value.apiKeyConfigured ? 'OK' : 'MISSING'}  API key (${value.provider})`);
-        console.log(`${value.hooksInstalled ? 'OK' : 'MISSING'}  Codex hooks (${value.hookEvents.join(', ') || 'none'})`);
+        console.log(`${value.codexInstalled ? 'OK' : 'MISSING'}  Codex: ${value.codexInstalled ? 'installed' : 'not installed'}`);
         console.log(`OK  Node ${value.node}`);
         console.log(`    Model: ${value.model}`);
-        console.log(`    Hooks: ${value.hooksFile}`);
         console.log(`    Data:  ${value.dataDir}`);
         console.log(`    Dashboard: ${value.dashboardUrl ?? `${dashboardAddress()} (not running; starts with the next Codex session)`}`);
-        console.log(`    Restore: ${value.settings.restoreMode} · max ${fmt(value.settings.restoreMaxChars)} chars`);
         console.log(`    Pruning: loss <= ${value.settings.lossThreshold.toFixed(2)} · pin ${fmt(value.settings.pinRecentMessages)} recent messages · require ${(value.settings.minReductionRatio * 100).toFixed(0)}% reduction`);
-        if (value.settings.restoreModeWarning)
-            console.log(`WARN  ${value.settings.restoreModeWarning}`);
-        if (!value.apiKeyConfigured || !value.hooksInstalled) {
+        if (!value.apiKeyConfigured || !value.codexInstalled) {
             console.log(`\nFix: jevcomp install`);
         }
         return;

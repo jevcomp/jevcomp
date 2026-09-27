@@ -5,7 +5,31 @@ import { createServer } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { codexArguments, runCodex } from '../dist/codex-proxy.js';
+
+test('Codex install writes its marker without creating hook configuration', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-codex-install-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const config = join(root, 'config');
+  const hooks = join(root, 'hooks.json');
+  const env = { ...process.env, JEVCOMP_CONFIG_DIR: config, CODEX_HOME: join(root, 'codex'), CODEX_HOOKS_FILE: hooks, TYPESAFE_API_KEY: 'test-key' };
+  const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, 'install', 'typesafe', 'codex'], {
+    cwd: root,
+    encoding: 'utf8',
+    input: '',
+    env,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.includes('Connected to Codex. Start it with `jevcomp codex`.'), true);
+  assert.equal(await import('node:fs/promises').then(({ readFile }) => readFile(join(config, 'codex-installed'), 'utf8')), '');
+  await assert.rejects(import('node:fs/promises').then(({ access }) => access(hooks)));
+  const removed = spawnSync(process.execPath, [cli, 'uninstall', 'codex'], { cwd: root, encoding: 'utf8', env });
+  assert.equal(removed.status, 0, removed.stderr);
+  await assert.rejects(import('node:fs/promises').then(({ access }) => access(join(config, 'codex-installed'))));
+});
 
 test('jevcomp codex injects its provider, preserves args, returns child status and closes the proxy', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'jev-codex-cli-'));

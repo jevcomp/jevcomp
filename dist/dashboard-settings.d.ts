@@ -1,6 +1,5 @@
 import { type KeyStatus } from './provider.js';
 import { type SettingName, type SettingsAgent } from './settings.js';
-import { type HookActivity } from './store.js';
 type Env = Record<string, string | undefined>;
 type Provider = 'openrouter' | 'typesafe';
 export interface SettingsSnapshot {
@@ -16,11 +15,7 @@ export interface SettingsSnapshot {
     lastAgent: 'codex' | 'claude' | 'agy' | null;
     agents: {
         codex: {
-            hooks: {
-                installed: number;
-                total: number;
-                activity: HookActivity;
-            };
+            lastRun: string | null;
         } | null;
         claude: {
             functionHooks: boolean;

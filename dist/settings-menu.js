@@ -1,27 +1,6 @@
 import { resetUserSettings, setUserSetting, settingOverride, userSettings } from './settings.js';
-const chars = (n) => (n === 0 ? 'No limit' : `${n.toLocaleString('en-US')} characters`);
 const percent = (n) => `${Math.round(n * 100)}%`;
 export const SETTINGS_ITEMS = [
-    {
-        name: 'restore-mode',
-        title: 'How much text to send to Codex',
-        help: 'After compaction, jevcomp sends Codex what its summary lost. All the text: everything, up to the limit below. '
-            + 'Part of the text: the list plus an excerpt. Only the list: just the names of the kept commands and files and where '
-            + 'they are saved on your computer; Codex opens the full text only if it needs it.',
-        choices: [
-            { value: 'preserve', label: 'All the text' },
-            { value: 'balanced', label: 'Part of the text' },
-            { value: 'minimal', label: 'Only the list' },
-        ],
-        current: (settings) => settings.restoreMode,
-    },
-    {
-        name: 'restore-max-chars',
-        title: 'Limit on text sent to Codex',
-        help: 'The most text jevcomp sends to Codex after each compaction. Higher keeps more details but takes more room in the conversation.',
-        choices: [20_000, 40_000, 60_000, 100_000, 150_000].map((n) => ({ value: String(n), label: chars(n) })),
-        current: (settings) => String(settings.restoreMaxChars),
-    },
     {
         name: 'pin-recent-messages',
         title: 'Recent messages never cut',

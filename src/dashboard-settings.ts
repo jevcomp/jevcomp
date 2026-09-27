@@ -1,12 +1,12 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { dashboardPort } from './dashboard-service.js';
-import { inspectHooks } from './install.js';
-import { keyStatus, resolveProvider, savePreferredProvider, saveProviderConfiguration, type KeyStatus } from './provider.js';
+import { configDir, keyStatus, resolveProvider, savePreferredProvider, saveProviderConfiguration, type KeyStatus } from './provider.js';
 import { SETTINGS_ITEMS } from './settings-menu.js';
 import { resetUserSettings, setUserSetting, settingOverride, userSettings, type SettingName, type SettingsAgent } from './settings.js';
-import { readHistory, readHookActivity, type HookActivity } from './store.js';
+import { readHistory } from './store.js';
 import { VERSION } from './version.js';
 import { agyCaInstalled, agyCertificateThumbprint } from './agy-proxy.js';
 
@@ -21,7 +21,7 @@ export interface SettingsSnapshot {
   version: string;
   lastAgent: 'codex' | 'claude' | 'agy' | null;
   agents: {
-    codex: { hooks: { installed: number; total: number; activity: HookActivity } } | null;
+    codex: { lastRun: string | null } | null;
     claude: { functionHooks: boolean; lastRun: string | null } | null;
     agy: { installed: boolean };
   };
@@ -55,13 +55,12 @@ async function claudeInstallation(env: Env): Promise<{ functionHooks: boolean } 
 export async function settingsSnapshot(env: Env = process.env, agent: SettingsAgent = 'codex'): Promise<SettingsSnapshot> {
   const settings = userSettings(env, agent);
   const history = await readHistory(env);
-  const codexHooks = (await inspectHooks(env)).events.length;
+  const codexMarker = join(configDir(env), 'codex-installed');
+  const codexInstalled = existsSync(codexMarker);
   const claude = await claudeInstallation(env);
   const agyInstalled = await antigravityInstalled(env);
   const lastJev = [...history].reverse().find((row) => row.phase === 'precompact' || (!row.phase && row.status === 'failed'));
   const settingValue: Record<SettingName, string> = {
-    'restore-mode': settings.restoreMode,
-    'restore-max-chars': String(settings.restoreMaxChars),
     'pin-recent-messages': String(settings.pinRecentMessages),
     'loss-threshold': String(settings.lossThreshold),
     'min-reduction-ratio': String(settings.minReductionRatio),
@@ -74,7 +73,7 @@ export async function settingsSnapshot(env: Env = process.env, agent: SettingsAg
     version: VERSION,
     lastAgent: history.length ? history[history.length - 1]!.host ?? 'codex' : null,
     agents: {
-      codex: codexHooks ? { hooks: { installed: codexHooks, total: 4, activity: await readHookActivity(env) } } : null,
+      codex: codexInstalled ? { lastRun: [...history].reverse().find((row) => row.host === 'codex' || !row.host)?.at ?? null } : null,
       claude: claude ? { ...claude, lastRun: [...history].reverse().find((row) => row.host === 'claude')?.at ?? null } : null,
       agy: { installed: agyInstalled },
     },

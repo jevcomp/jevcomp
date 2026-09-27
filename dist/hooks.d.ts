@@ -1,7 +1,7 @@
 export interface HookOptions {
     startDashboard?: boolean;
 }
-/** Jev settings shared by the Codex hooks and the dashboard's compaction for Claude Code. */
+/** Jev settings shared by the Codex proxy and Claude Code compaction. */
 export declare function jevCompactOptions(env: Record<string, string | undefined>): {
     provider: "typesafe" | "openrouter";
     env: Record<string, string | undefined>;

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startDashboard } from '../dist/dashboard.js';
 import { userSettings } from '../dist/settings.js';
-import { readHookActivity, recordHookActivity } from '../dist/store.js';
+import { appendHistory } from '../dist/store.js';
 import { VERSION } from '../dist/version.js';
 
 async function dashboard(t, extra = {}) {
@@ -28,11 +28,11 @@ test('settings page changes a setting and reports it back', async (t) => {
   const { env, html, post } = await dashboard(t);
   assert.match(html, /Configurações/);
   assert.match(html, /id="agents-info"/);
-  const response = await post({ action: 'setting', name: 'restore-mode', value: 'minimal' });
+  const response = await post({ action: 'setting', name: 'pin-recent-messages', value: '8' });
   assert.equal(response.status, 200);
   const snapshot = await response.json();
-  assert.equal(snapshot.settings.find((item) => item.name === 'restore-mode').value, 'minimal');
-  assert.equal(userSettings(env, 'codex').restoreMode, 'minimal');
+  assert.equal(snapshot.settings.find((item) => item.name === 'pin-recent-messages').value, '8');
+  assert.equal(userSettings(env, 'codex').pinRecentMessages, 8);
   assert.equal(snapshot.version, VERSION);
   assert.deepEqual(snapshot.agents, { codex: null, claude: null, agy: { installed: false } });
 });
@@ -71,11 +71,11 @@ test('settings API isolates agent sections and rejects an invalid agent', async 
   const send = (agent, body) => fetch(`${url}api/settings?agent=${agent}`, {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-jevcomp-token': token }, body: JSON.stringify(body),
   });
-  const claude = await send('claude', { action: 'setting', name: 'restore-mode', value: 'preserve' });
+  const claude = await send('claude', { action: 'setting', name: 'pin-recent-messages', value: '8' });
   assert.equal(claude.status, 200);
-  assert.equal((await claude.json()).settings.find((item) => item.name === 'restore-mode').value, 'preserve');
-  assert.equal(userSettings(env, 'codex').restoreMode, 'minimal');
-  assert.equal(userSettings(env, 'claude').restoreMode, 'preserve');
+  assert.equal((await claude.json()).settings.find((item) => item.name === 'pin-recent-messages').value, '8');
+  assert.equal(userSettings(env, 'codex').pinRecentMessages, 6);
+  assert.equal(userSettings(env, 'claude').pinRecentMessages, 8);
   const invalid = await fetch(`${url}api/settings?agent=invalid`, {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-jevcomp-token': token }, body: JSON.stringify({ action: 'reset' }),
   });
@@ -94,12 +94,19 @@ test('requests addressed to another host name are refused', async (t) => {
   assert.equal(status, 403);
 });
 
-test('hook runs are remembered as proof the hooks are active', async () => {
-  const env = { JEVCOMP_DATA_DIR: await mkdtemp(join(tmpdir(), 'jevcomp-hook-activity-')) };
-  await recordHookActivity('UserPromptSubmit', env);
-  await recordHookActivity('SomethingElse', env);
-  const activity = await readHookActivity(env);
-  assert.deepEqual(Object.keys(activity), ['UserPromptSubmit']);
+test('Codex snapshot uses the install marker and latest Codex history row', async (t) => {
+  const { env, post, html } = await dashboard(t);
+  await appendHistory({ at: '2026-09-26T10:00:00.000Z', sessionId: 'claude', host: 'claude', status: 'restored' }, env);
+  await appendHistory({ at: '2026-09-26T10:01:00.000Z', sessionId: 'codex-old', host: 'codex', status: 'restored' }, env);
+  await appendHistory({ at: '2026-09-26T10:02:00.000Z', sessionId: 'codex-new', host: 'codex', status: 'restored' }, env);
+  await appendHistory({ at: '2026-09-26T10:03:00.000Z', sessionId: 'legacy-codex', status: 'restored' }, env);
+  const absent = await (await post({ action: 'reset' })).json();
+  assert.equal(absent.agents.codex, null);
+  await mkdir(env.JEVCOMP_CONFIG_DIR, { recursive: true });
+  await writeFile(join(env.JEVCOMP_CONFIG_DIR, 'codex-installed'), '');
+  const installed = await (await post({ action: 'reset' })).json();
+  assert.deepEqual(installed.agents.codex, { lastRun: '2026-09-26T10:03:00.000Z' });
+  assert.match(html, /Uso/);
 });
 
 test('the version shown matches the package manifest', async () => {

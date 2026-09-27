@@ -311,7 +311,7 @@ async function parseForwardRange(file, start, end, chunkBytes) {
  * a giant JSONL record that crosses many read chunks. A crossing line is kept
  * as buffer fragments and concatenated only once, when its leading newline is found.
  */
-export async function loadCodexRolloutSnapshot(path, chunkBytes = 1024 * 1024) {
+async function loadCodexRolloutSnapshot(path, chunkBytes = 1024 * 1024) {
     const file = await open(path, 'r');
     try {
         const size = Number((await file.stat()).size);
@@ -401,8 +401,6 @@ export async function loadCodexRolloutSnapshot(path, chunkBytes = 1024 * 1024) {
         const from = checkpoint ?? 0;
         return {
             messages: await parseForwardRange(file, from, size, chunkBytes),
-            fileBytes: size,
-            ...(checkpoint !== undefined ? { checkpointOffset: checkpoint } : {}),
         };
     }
     finally {

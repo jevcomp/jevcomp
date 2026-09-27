@@ -151,12 +151,8 @@ export class UnsupportedCodexRolloutError extends Error {
   }
 }
 
-export interface CodexRolloutSnapshot {
+interface CodexRolloutSnapshot {
   messages: Message[];
-  /** File size observed while loading this snapshot. */
-  fileBytes: number;
-  /** Byte offset of the newest bounded modern `compacted` checkpoint, when one was used. */
-  checkpointOffset?: number;
 }
 
 function applyRolloutRow(messages: Message[], row: Record<string, unknown>): void {
@@ -285,7 +281,7 @@ async function parseForwardRange(file: Awaited<ReturnType<typeof open>>, start: 
  * a giant JSONL record that crosses many read chunks. A crossing line is kept
  * as buffer fragments and concatenated only once, when its leading newline is found.
  */
-export async function loadCodexRolloutSnapshot(path: string, chunkBytes = 1024 * 1024): Promise<CodexRolloutSnapshot> {
+async function loadCodexRolloutSnapshot(path: string, chunkBytes = 1024 * 1024): Promise<CodexRolloutSnapshot> {
   const file = await open(path, 'r');
   try {
     const size = Number((await file.stat()).size);
@@ -369,8 +365,6 @@ export async function loadCodexRolloutSnapshot(path: string, chunkBytes = 1024 *
     const from = checkpoint ?? 0;
     return {
       messages: await parseForwardRange(file, from, size, chunkBytes),
-      fileBytes: size,
-      ...(checkpoint !== undefined ? { checkpointOffset: checkpoint } : {}),
     };
   } finally {
     await file.close();

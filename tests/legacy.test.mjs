@@ -6,30 +6,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adoptLegacyEnvironment } from '../dist/legacy.js';
-import { inspectHooks, installHooks } from '../dist/install.js';
 import { readHistory } from '../dist/store.js';
 import { ensureDashboard, runningDashboard } from '../dist/dashboard-service.js';
 
 test('old JEV_COMPACT_* settings apply unless the new name is set', () => {
-  const env = { JEV_COMPACT_RESTORE_MODE: 'balanced', JEV_COMPACT_RETRIES: '0', JEVCOMP_RETRIES: '2' };
+  const env = { JEV_COMPACT_RETRIES: '0', JEVCOMP_RETRIES: '2' };
   adoptLegacyEnvironment(env);
-  assert.equal(env.JEVCOMP_RESTORE_MODE, 'balanced');
   assert.equal(env.JEVCOMP_RETRIES, '2');
-});
-
-test('installing replaces hooks written under the old name', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'jevcomp-legacy-hooks-'));
-  const file = join(root, 'hooks.json');
-  await writeFile(file, JSON.stringify({ hooks: { PreCompact: [{ hooks: [
-    { type: 'command', command: 'node old/cli.js hook --jev-compact' },
-    { type: 'command', command: 'node unrelated.js' },
-  ] }] } }));
-  const env = { CODEX_HOOKS_FILE: file };
-  await installHooks('/new/jevcomp/dist/cli.js', env);
-  const commands = JSON.parse(await readFile(file, 'utf8')).hooks.PreCompact.flatMap((entry) => entry.hooks.map((hook) => hook.command));
-  assert.equal(commands.some((command) => command.includes('--jev-compact')), false);
-  assert.equal(commands.includes('node unrelated.js'), true);
-  assert.deepEqual((await inspectHooks(env)).events, ['PostCompact', 'PreCompact', 'SessionStart', 'UserPromptSubmit']);
 });
 
 test('history recorded by the old plugin stays visible', async () => {

@@ -28,21 +28,20 @@ test('arrow keys change and save settings without typing names', async () => {
   const env = { JEVCOMP_CONFIG_DIR: await mkdtemp(join(tmpdir(), 'jevcomp-menu-')) };
   const terminal = fakeTerminal();
   const run = runSettingsMenu(terminal, env, 'codex');
-  await press(terminal, run, ['\x1b[C', '\x1b[B', '\x1b[C', '\x1b']);
+  await press(terminal, run, ['\x1b[C', '\x1b']);
   const settings = userSettings(env, 'codex');
-  assert.equal(settings.restoreMode, 'preserve');
-  assert.equal(settings.restoreMaxChars, 100_000);
-  assert.match(terminal.screen(), /All the text/);
-  assert.match(terminal.screen(), /The most text jevcomp sends to Codex/);
+  assert.equal(settings.pinRecentMessages, 8);
+  assert.match(terminal.screen(), /Recent messages never cut/);
+  assert.doesNotMatch(terminal.screen(), /restore-mode|restore-max-chars/);
 });
 
 test('a setting decided by an environment variable is explained, not changed', async () => {
-  const env = { JEVCOMP_CONFIG_DIR: await mkdtemp(join(tmpdir(), 'jevcomp-menu-env-')), JEVCOMP_RESTORE_MODE: 'minimal' };
+  const env = { JEVCOMP_CONFIG_DIR: await mkdtemp(join(tmpdir(), 'jevcomp-menu-env-')), JEVCOMP_LOSS_THRESHOLD: '0.7' };
   const terminal = fakeTerminal();
   const run = runSettingsMenu(terminal, env, 'codex');
-  await press(terminal, run, ['\x1b[C', 'q']);
-  assert.equal(userSettings({ JEVCOMP_CONFIG_DIR: env.JEVCOMP_CONFIG_DIR }, 'codex').restoreMode, 'minimal');
-  assert.match(terminal.screen(), /JEVCOMP_RESTORE_MODE is set in your environment/);
+  await press(terminal, run, ['\x1b[B', '\x1b[C', 'q']);
+  assert.equal(userSettings({ JEVCOMP_CONFIG_DIR: env.JEVCOMP_CONFIG_DIR }, 'codex').lossThreshold, 0.5);
+  assert.match(terminal.screen(), /JEVCOMP_LOSS_THRESHOLD is set in your environment/);
 });
 
 test('the last row resets everything to defaults', async () => {
@@ -50,6 +49,6 @@ test('the last row resets everything to defaults', async () => {
   const terminal = fakeTerminal();
   const run = runSettingsMenu(terminal, env, 'codex');
   await press(terminal, run, ['\x1b[C', '\x1b[A', '\r', '\x03']);
-  assert.equal(userSettings(env, 'codex').restoreMode, 'minimal');
+  assert.equal(userSettings(env, 'codex').pinRecentMessages, 6);
   assert.match(terminal.screen(), /back to their defaults/);
 });

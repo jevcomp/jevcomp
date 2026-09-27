@@ -37,7 +37,7 @@ After `jevcomp install`, open each agent like this:
 | Claude Code | `claude` (as usual) | Saves tokens on every compaction. The first time, restart Claude Code once. |
 | Antigravity (experimental) | `jevcomp agy` | Runs through jevcomp but saves nothing yet: jevcomp does not know yet which Antigravity request is the compaction, so it has nothing to replace. |
 
-- **Codex, first start:** type `/hooks` and approve the four jevcomp hooks. To force a compaction and see it work, type `/compact`.
+- **Codex:** always start it with `jevcomp codex`. To force a compaction and see it work, type `/compact`.
 - **Antigravity:** `jevcomp install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the warning. It needs OpenSSL (`winget install ShiningLight.OpenSSL.Light`). Without the certificate, `jevcomp agy` opens plain Antigravity. `JEVCOMP_CAPTURE=1` saves the requests it sees.
 - **Dashboard:** http://127.0.0.1:43127/ opens with Codex and Claude Code sessions; `jevcomp dashboard` opens it by hand.
 
@@ -67,7 +67,6 @@ Run `jevcomp doctor` (plugin: ask Claude Code `Check jevcomp`). It is working wh
 | `jevcomp uninstall` | jevcomp from every agent, and stops the dashboard |
 | `jevcomp uninstall codex` / `claude` / `agy` | Only from that agent (`agy` also removes the certificate); the dashboard stays while another agent uses it |
 | `claude plugin uninstall jevcomp@jevcomp` then `claude plugin marketplace remove jevcomp` | The Claude Code plugin |
-| `codex plugin remove jevcomp@jevcomp` then `codex plugin marketplace remove jevcomp` | The Codex plugin, if you installed it before 0.7.3 |
 
 ## Remove everything
 
@@ -92,13 +91,11 @@ Run `jevcomp settings`, use the **Configurações** page of the dashboard, or as
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `restore-mode` | `minimal` | Codex only. How much is added back: `minimal` (only the list of what Jev kept and where it is saved), `balanced` (the list plus an excerpt), `preserve` (all selected text). |
-| `restore-max-chars` | `60000` | Codex only. Most characters added back after a compaction; `0` removes the limit. |
 | `pin-recent-messages` | `6` | Newest messages Jev never touches. |
 | `loss-threshold` | `0.5` | Jev removes or shortens an output only when its risk of losing something still needed is below this. Higher cuts more. |
 | `min-reduction-ratio` | `0.15` | jevcomp acts only when it cuts at least this share of the text. |
 
-Settings are saved in `~/.config/jevcomp/settings.json`. The variables `JEVCOMP_RESTORE_MODE`, `JEVCOMP_RESTORE_MAX_CHARS`, `JEVCOMP_PIN_RECENT_MESSAGES`, `JEVCOMP_LOSS_THRESHOLD` and `JEVCOMP_MIN_REDUCTION_RATIO` override them.
+Settings are saved in `~/.config/jevcomp/settings.json`. The variables `JEVCOMP_PIN_RECENT_MESSAGES`, `JEVCOMP_LOSS_THRESHOLD` and `JEVCOMP_MIN_REDUCTION_RATIO` override them.
 
 ### Advanced options
 
@@ -107,14 +104,11 @@ Rarely needed; set them as environment variables.
 | Option | Default | What it controls |
 | --- | ---: | --- |
 | `JEVCOMP_CONCURRENCY` | `4` | Jev requests at the same time. |
-| `JEVCOMP_INDEX_MAX_CHARS` | `12000` | Size of the list used by `balanced` and `minimal`. |
 | `JEVCOMP_MAX_STATE_TOKENS` | `24000` | Size of the conversation copy shown to Jev. |
 | `JEVCOMP_MAX_REQUEST_TOKENS` | `30000` | Size of one Jev request. |
 | `JEVCOMP_TRUNCATE_HEAD_CHARS` | `300` | Characters kept when an output is shortened. |
 | `JEVCOMP_TIMEOUT_MS` | `20000` | Time limit for one Jev request. |
 | `JEVCOMP_RETRIES` | `1` | Retries after a network failure. |
-| `JEVCOMP_RESTORE_TTL_MS` | `86400000` | Codex only. How long a compaction waits to add its details back. |
-| `JEVCOMP_STATE_MAX_AGE_MS` | `172800000` | Age at which leftover session files are deleted. |
 | `JEVCOMP_GOAL` | automatic | Task description given to Jev instead of your recent messages. |
 | `JEVCOMP_DATA_DIR` | `~/.jevcomp` | Where history and session files go. |
 
@@ -128,7 +122,7 @@ Rarely needed; set them as environment variables.
 
 For each finished command, Jev answers two questions: would removing the command and its output lose something still needed, and would shortening the output. The answer becomes **Keep**, **Shorten** (the first characters plus a note) or **Remove** (the command can be run again). Your messages and Codex's instructions are never removed. Common secret patterns are hidden before anything goes to Jev, but not every possible secret can be recognised.
 
-**Codex**, started with `jevcomp codex`, sends its compaction request to jevcomp's local proxy, which answers it with Jev's cuts instead of letting OpenAI write a summary. Started with plain `codex`, the jevcomp hooks only add back, after Codex's own summary, the selected text the summary lost.
+**Codex** runs through `jevcomp codex`. Its local proxy answers compaction requests with Jev's cuts when they meet the configured reduction threshold; otherwise the request goes to OpenAI as usual.
 
 **Claude Code** lets a plugin replace the compaction itself (an early-access feature called function hooks), so there jevcomp hands back the conversation with Jev's cuts instead of a summary.
 
@@ -138,7 +132,7 @@ To preview what Jev would keep from a Codex rollout without changing anything: `
 
 ## Data
 
-Everything is in `~/.jevcomp` (or `JEVCOMP_DATA_DIR`): `history.jsonl` for the dashboard, and per-session files that are deleted after two days. History from versions before 0.7.0, in `~/.codex/jevcomp` and the Codex plugin data folder, is still read. An npm install for Codex also keeps a copy of the program in `~/.codex/jevcomp/runtime` (or `JEVCOMP_RUNTIME_DIR`).
+Everything is in `~/.jevcomp` (or `JEVCOMP_DATA_DIR`): `history.jsonl` for the dashboard. History from versions before 0.7.0, in `~/.codex/jevcomp` and the old Codex plugin data folder, is still read.
 
 ## Development
 

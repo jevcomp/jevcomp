@@ -1,6 +1,6 @@
-import { copyFile, cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { LEGACY_HOOK_TAG } from './legacy.js';
 
 interface HookEntry { matcher?: string; hooks: Array<Record<string, unknown>> }
@@ -25,8 +25,6 @@ async function loadHookConfig(path: string): Promise<{ config: HookConfig; exist
   return { config: parsed as HookConfig, existed: true };
 }
 
-function unixCommand(cliPath: string): string { return `node ${JSON.stringify(cliPath)} hook --jevcomp`; }
-function windowsCommand(cliPath: string): string { return `node "${cliPath.replace(/"/g, '""')}" hook --jevcomp`; }
 function oursHook(hook: Record<string, unknown>): boolean {
   return (
     TAGS.some((tag) => typeof hook.command === 'string' && hook.command.includes(tag)) ||
@@ -47,70 +45,7 @@ export function runtimeDir(env = process.env): string {
   return env.JEVCOMP_RUNTIME_DIR ?? join(codexHome(env), 'jevcomp', 'runtime');
 }
 
-/** Copy the compiled runtime to a stable location so setup does not depend on the extracted checkout. */
-export async function installRuntime(cliPath: string, env = process.env): Promise<string> {
-  const sourceDist = dirname(resolve(cliPath));
-  const root = runtimeDir(env);
-  const target = join(root, 'dist');
-  if (resolve(sourceDist) === resolve(target)) return join(target, 'cli.js');
-  const staging = join(root, `.dist.${process.pid}.tmp`);
-  const backup = join(root, `.dist.${process.pid}.bak`);
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  await rm(staging, { recursive: true, force: true });
-  await rm(backup, { recursive: true, force: true });
-  await cp(sourceDist, staging, { recursive: true, force: true });
-  let hadTarget = false;
-  try { await rename(target, backup); hadTarget = true; }
-  catch (error) { if (errorCode(error) !== 'ENOENT') { await rm(staging, { recursive: true, force: true }); throw error; } }
-  try { await rename(staging, target); }
-  catch (error) {
-    if (hadTarget) { try { await rename(backup, target); } catch {} }
-    await rm(staging, { recursive: true, force: true });
-    throw error;
-  }
-  if (hadTarget) await rm(backup, { recursive: true, force: true });
-  return join(target, 'cli.js');
-}
-export async function inspectHooks(env = process.env): Promise<{ path: string; installed: boolean; events: string[] }> {
-  const path = env.CODEX_HOOKS_FILE ?? join(codexHome(env), 'hooks.json');
-  let config: HookConfig;
-  try { ({ config } = await loadHookConfig(path)); } catch { return { path, installed: false, events: [] }; }
-  const events = Object.entries(config.hooks ?? {})
-    .filter(([, entries]) => (entries ?? []).some((entry) => ours(entry)))
-    .map(([name]) => name)
-    .sort();
-  const required = ['PostCompact', 'PreCompact', 'SessionStart', 'UserPromptSubmit'];
-  return { path, installed: required.every((event) => events.includes(event)), events };
-}
-
-function commandHook(command: string, commandWindows: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return { type: 'command', command, commandWindows, ...extra };
-}
-
-export async function installHooks(cliPath: string, env = process.env): Promise<string> {
-  const path = env.CODEX_HOOKS_FILE ?? join(codexHome(env), 'hooks.json');
-  const { config, existed } = await loadHookConfig(path);
-  const before = JSON.stringify(config);
-  config.hooks ??= {};
-  const resolved = resolve(cliPath);
-  const command = unixCommand(resolved);
-  const commandWindows = windowsCommand(resolved);
-  const add = (name: string, entry: HookEntry) => {
-    const list = config.hooks![name] ?? [];
-    config.hooks![name] = [...list.map(withoutOurs).filter((candidate): candidate is HookEntry => candidate !== undefined), entry];
-  };
-  add('PreCompact', { matcher: 'manual|auto', hooks: [commandHook(command, commandWindows, { timeout: 120, statusMessage: 'Selecting retained context with Jev' })] });
-  add('PostCompact', { matcher: 'manual|auto', hooks: [commandHook(command, commandWindows, { timeout: 10 })] });
-  add('SessionStart', { matcher: 'startup|resume|clear|compact', hooks: [commandHook(command, commandWindows, { timeout: 10, additionalContextLimit: 0, statusMessage: 'Loading jevcomp' })] });
-  add('UserPromptSubmit', { hooks: [commandHook(command, commandWindows, { timeout: 10, additionalContextLimit: 0 })] });
-  if (JSON.stringify(config) === before) return path;
-  await mkdir(dirname(path), { recursive: true });
-  if (existed) await copyFile(path, `${path}.bak.${Date.now()}`);
-  await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  return path;
-}
-
-export async function uninstallHooks(env = process.env): Promise<string> {
+export async function removeLegacyHooks(env = process.env): Promise<string> {
   const path = env.CODEX_HOOKS_FILE ?? join(codexHome(env), 'hooks.json');
   let loaded: { config: HookConfig; existed: boolean };
   try { loaded = await loadHookConfig(path); } catch (error) { throw error; }

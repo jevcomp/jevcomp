@@ -1,11 +1,7 @@
 import { type Env } from './provider.js';
-export type RestoreMode = 'preserve' | 'balanced' | 'minimal';
 export type SettingsAgent = 'codex' | 'claude' | 'agy';
-export type SettingName = 'restore-mode' | 'restore-max-chars' | 'pin-recent-messages' | 'loss-threshold' | 'min-reduction-ratio';
+export type SettingName = 'pin-recent-messages' | 'loss-threshold' | 'min-reduction-ratio';
 export interface UserSettings {
-    restoreMode: RestoreMode;
-    restoreModeWarning?: string;
-    restoreMaxChars: number;
     pinRecentMessages: number;
     lossThreshold: number;
     minReductionRatio: number;
