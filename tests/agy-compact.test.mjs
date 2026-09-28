@@ -90,6 +90,30 @@ test('Antigravity supports the current toolCall/toolResponse wire shape', async 
   assert.match(response.output, /jevcomp omitted/);
 });
 
+test('Antigravity supports local harness argumentsJson/responseJson fields', async () => {
+  const original = {
+    requestId: 'request-harness-shape',
+    sessionId: 'session-harness-shape',
+    contents: [
+      { role: 'user', parts: [{ text: 'inspect the build' }] },
+      { role: 'model', parts: [{ toolCall: { id: 'tool_2', name: 'run_command', argumentsJson: '{"command":"npm test"}' } }] },
+      { role: 'user', parts: [{ toolResponse: { id: 'tool_2', name: 'run_command', responseJson: 'HEAD\n' + 'bulk '.repeat(1000) + '\nTAIL' } }] },
+      { role: 'model', parts: [{ text: 'done' }] },
+    ],
+  };
+  const result = await compactAgyPayload(original, askerFor(0.9, 0.1), createAgyCompactionState(), {
+    preserveRecentMessages: 0,
+    truncateHeadChars: 60,
+    truncateTailChars: 60,
+    minEligibleChars: 0,
+    minReductionRatio: 0,
+  });
+  assert.equal(result.changed, true);
+  assert.match(result.payload.contents[2].parts[0].toolResponse.responseJson, /^HEAD/);
+  assert.match(result.payload.contents[2].parts[0].toolResponse.responseJson, /TAIL$/);
+  assert.match(result.payload.contents[2].parts[0].toolResponse.responseJson, /jevcomp omitted/);
+});
+
 test('a Jev drop decision keeps the Gemini call/signature and omits only its result', async () => {
   const original = payload('valuable '.repeat(1000));
   const result = await compactAgyPayload(original, askerFor(0.1, 0.1), createAgyCompactionState(), {

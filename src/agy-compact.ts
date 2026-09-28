@@ -145,7 +145,7 @@ function collectRefs(contents: readonly unknown[]): { calls: PartRef[]; response
       }
       for (const [kind, key, resultKeys] of [
         ['function', 'functionResponse', ['result']],
-        ['tool', 'toolResponse', ['response_json', 'result', 'output', 'text']],
+        ['tool', 'toolResponse', ['responseJson', 'response_json', 'result', 'output', 'text']],
       ] as const) {
         if (!record(part[key])) continue;
         const response = part[key] as RecordValue;
@@ -229,7 +229,7 @@ function toMessages(contents: readonly unknown[], pairs: readonly Pair[]): Messa
           ? pair.call.value.args
           : record(pair.call.value.arguments)
             ? pair.call.value.arguments
-            : pair.call.value.args ?? pair.call.value.arguments ?? pair.call.value.arguments_json ?? {},
+            : pair.call.value.args ?? pair.call.value.arguments ?? pair.call.value.argumentsJson ?? pair.call.value.arguments_json ?? {},
       })),
       ...(responses.length ? { toolResults: responses.map((pair) => ({ callId: pair.callId, output: pair.response.result })) } : {}),
     };
