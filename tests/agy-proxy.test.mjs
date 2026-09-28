@@ -44,6 +44,7 @@ test('missing OpenSSL reports the install command', async (t) => {
   await assert.rejects(ensureAgyCertificate({
     ...process.env,
     JEVCOMP_AGY_HOME: join(root, 'ca'),
+    JEVCOMP_OPENSSL: join(root, 'missing-openssl.exe'),
     [pathVariable]: path,
   }), {
     message: 'openssl was not found; install it first (for example: winget install ShiningLight.OpenSSL.Light)',

@@ -16,14 +16,37 @@ const allowed = new Set<string>(AGY_HOSTS);
 export const isAgyInterceptHost = (hostname: string): boolean => allowed.has(hostname.toLowerCase());
 const caDir = (env: Record<string, string | undefined>) => join(env.JEVCOMP_AGY_HOME ?? join(homedir(), '.jevcomp', 'agy-ca'));
 
-function openssl(args: string[], env: Record<string, string | undefined>): void {
-  try { execFileSync('openssl', args, { stdio: 'ignore', windowsHide: true, env }); }
-  catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-      throw new Error('openssl was not found; install it first (for example: winget install ShiningLight.OpenSSL.Light)');
-    }
-    throw error;
+const OPENSSL_MISSING = 'openssl was not found; install it first (for example: winget install ShiningLight.OpenSSL.Light)';
+
+function opensslCandidates(env: Record<string, string | undefined>): string[] {
+  const explicit = env.JEVCOMP_OPENSSL?.trim();
+  if (explicit) return [explicit];
+  const candidates = ['openssl'];
+  if (process.platform === 'win32') {
+    const programFiles = env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files';
+    candidates.push(
+      join(programFiles, 'Git', 'mingw64', 'bin', 'openssl.exe'),
+      join(programFiles, 'Git', 'usr', 'bin', 'openssl.exe'),
+    );
   }
+  return [...new Set(candidates)];
+}
+
+function opensslRun<T>(args: string[], env: Record<string, string | undefined>, options: Record<string, unknown>): T {
+  let missing = false;
+  for (const executable of opensslCandidates(env)) {
+    try { return execFileSync(executable, args, { windowsHide: true, env, ...options }) as T; }
+    catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') { missing = true; continue; }
+      throw error;
+    }
+  }
+  if (missing) throw new Error(OPENSSL_MISSING);
+  throw new Error(OPENSSL_MISSING);
+}
+
+function openssl(args: string[], env: Record<string, string | undefined>): void {
+  opensslRun(args, env, { stdio: 'ignore' });
 }
 
 export async function ensureAgyCertificate(env = process.env): Promise<{ directory: string; thumbprint: string }> {
@@ -46,8 +69,8 @@ export async function ensureAgyCertificate(env = process.env): Promise<{ directo
 
 export async function agyCertificateThumbprint(env = process.env): Promise<string | undefined> {
   try {
-    const output = execFileSync('openssl', ['x509', '-in', join(caDir(env), 'ca.crt'), '-noout', '-fingerprint', '-sha1'], { encoding: 'utf8', windowsHide: true, env });
-    return output.match(/=([A-F0-9:]{59})/i)?.[1].replace(/:/g, '').toUpperCase();
+    const output = opensslRun<string>(['x509', '-in', join(caDir(env), 'ca.crt'), '-noout', '-fingerprint', '-sha1'], env, { encoding: 'utf8' });
+    return output.match(/=([A-F0-9:]{59})/i)?.[1]?.replace(/:/g, '').toUpperCase();
   } catch { return undefined; }
 }
 
