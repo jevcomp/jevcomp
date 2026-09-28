@@ -3,7 +3,7 @@ import type { CallDecision, CompactStats, JevAsker } from './types.js';
 type RecordValue = Record<string, unknown>;
 type PlanAction = CallDecision['action'];
 interface SessionPlan {
-    goalKey: string;
+    contextKey: string;
     actions: Map<string, PlanAction>;
     touchedAt: number;
 }

@@ -110,7 +110,7 @@ test('complex or non-string function responses are never candidates', async () =
   assert.equal(asker.counter.calls, 0);
 });
 
-test('Antigravity reuses exact decisions in the same session and rejudges after the user goal changes', async () => {
+test('Antigravity reuses exact decisions only while semantic user/model context is unchanged', async () => {
   const state = createAgyCompactionState();
   const asker = askerFor(0.9, 0.1);
   const options = {
@@ -131,9 +131,15 @@ test('Antigravity reuses exact decisions in the same session and rejudges after 
     second.payload.request.contents[2].parts[0].functionResponse.response.result,
   );
 
+  const changedProgressInput = payload();
+  changedProgressInput.request.contents[3].parts[0].text = 'The first hypothesis was wrong; inspect the raw output again.';
+  const changedProgress = await compactAgyPayload(changedProgressInput, asker, state, options);
+  assert.equal(changedProgress.changed, true);
+  assert.equal(asker.counter.calls, 2);
+
   const changedGoal = await compactAgyPayload(payload(undefined, 'Now diagnose a different production failure'), asker, state, options);
   assert.equal(changedGoal.changed, true);
-  assert.equal(asker.counter.calls, 2);
+  assert.equal(asker.counter.calls, 3);
 });
 
 test('Antigravity avoids a Jev request when new eligible output cannot meet the configured reduction', async () => {

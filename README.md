@@ -35,7 +35,7 @@ After `jevcomp install`, open each agent like this:
 |---|---|---|
 | Codex | `jevcomp codex` | Saves tokens: jevcomp answers the compaction itself. Plain `codex` saves nothing. |
 | Claude Code | `claude` (as usual) | Saves tokens on every compaction. The first time, restart Claude Code once. |
-| Antigravity (experimental) | `jevcomp agy` | Jev selectively shortens old paired tool results in generation requests. Decisions are reused within the same session and re-evaluated when the user goal changes. |
+| Antigravity (experimental) | `jevcomp agy` | Jev selectively shortens old paired tool results in generation requests. Exact decisions are reused while semantic user/model context is unchanged and re-evaluated when the task progress changes. |
 
 - **Codex:** always start it with `jevcomp codex`. To force a compaction and see it work, type `/compact`.
 - **Antigravity:** `jevcomp install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the warning. It needs OpenSSL; jevcomp also discovers the copy bundled with Git for Windows, or you can set `JEVCOMP_OPENSSL` explicitly. Without the certificate, `jevcomp agy` opens plain Antigravity. `JEVCOMP_CAPTURE=1` saves the original requests it sees. Jev only edits unambiguous string tool results; unknown or ambiguous shapes pass through unchanged.

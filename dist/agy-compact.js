@@ -30,13 +30,13 @@ function plainText(content) {
         return [part.text];
     }).join('\n');
 }
-function goalKey(contents) {
+function semanticContextKey(contents) {
     const recent = contents.flatMap((content) => {
-        if (!record(content) || content.role !== 'user')
+        if (!record(content) || (content.role !== 'user' && content.role !== 'model'))
             return [];
         const text = plainText(content).trim();
-        return text ? [text] : [];
-    }).slice(-3);
+        return text ? [{ role: content.role, text }] : [];
+    }).slice(-4);
     return digest(JSON.stringify(recent));
 }
 function collectRefs(contents) {
@@ -222,13 +222,13 @@ function rawContentsChars(payload) {
 function candidateMap(pairs) {
     return new Map(pairs.map((pair, index) => [`t${index + 1}`, pair]));
 }
-function sessionPlan(state, sessionId, nextGoal) {
+function sessionPlan(state, sessionId, nextContext) {
     const previous = state.sessions.get(sessionId);
-    if (previous?.goalKey === nextGoal) {
+    if (previous?.contextKey === nextContext) {
         previous.touchedAt = Date.now();
         return previous;
     }
-    const fresh = { goalKey: nextGoal, actions: new Map(), touchedAt: Date.now() };
+    const fresh = { contextKey: nextContext, actions: new Map(), touchedAt: Date.now() };
     state.sessions.set(sessionId, fresh);
     if (state.sessions.size > MAX_SESSIONS) {
         const oldest = [...state.sessions.entries()].sort((a, b) => a[1].touchedAt - b[1].touchedAt)[0]?.[0];
@@ -249,7 +249,7 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
     const pairs = pairRefs(contents, preserveRecentMessages);
     if (!pairs.length)
         return undefined;
-    const plan = sessionPlan(state, sessionId, goalKey(contents));
+    const plan = sessionPlan(state, sessionId, semanticContextKey(contents));
     const unplanned = pairs.filter((pair) => !pair.pinned && !plan.actions.has(pair.fingerprint));
     const minEligible = Math.max(0, Math.floor(options.minEligibleChars ?? DEFAULT_MIN_ELIGIBLE_CHARS));
     const eligibleChars = unplanned.reduce((sum, pair) => sum + pair.response.result.length, 0);
