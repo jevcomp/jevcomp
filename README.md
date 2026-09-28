@@ -10,56 +10,123 @@ jevcomp uses **Jev**, a small, fast AI model that only answers yes/no questions,
 
 Your own messages are never removed. If anything fails, the original agent request passes through or native compaction runs normally. Jev is called only for eligible old tool evidence, billed to your OpenRouter or TypeSafe key.
 
-## Before you start
+## Instalação
 
-- **Node.js 20 or newer** ([nodejs.org](https://nodejs.org)).
-- **Git**, used to download jevcomp.
-- An **API key** from [OpenRouter](https://openrouter.ai/keys) or TypeSafe.
+Primeiro, instale o jevcomp:
 
-## Install
-
-The same for every agent:
-
-```bash
+```powershell
 npm install -g --install-links github:jevcomp/jevcomp
-jevcomp install
 ```
 
-`install` asks which agents to connect (Codex, Claude Code, Antigravity or all), the provider and the key. To skip the questions: `jevcomp install openrouter codex` (or `typesafe`, and `claude`, `agy` or `all`). Run it again to change the key or add an agent. The agents share the provider key, history and dashboard; pruning settings remain isolated per agent.
+### Instalar em todos os agentes
 
-## Use
+```powershell
+# OpenRouter
+jevcomp install openrouter all
 
-After `jevcomp install`, open each agent like this:
+# TypeSafe
+jevcomp install typesafe all
+```
 
-| Agent | Open it with | What changes |
-|---|---|---|
-| Codex | `jevcomp codex` | Saves tokens: jevcomp answers the compaction itself. Plain `codex` saves nothing. |
-| Claude Code | `jevcomp claude` | Uses the local model gateway plus the function hook. Plain `claude` still gets Jev compaction, but not gateway metering. |
-| Antigravity (experimental) | `jevcomp agy` | Jev selectively shortens old paired tool results in generation requests. Exact decisions are reused while semantic user/model context is unchanged and re-evaluated when the task progress changes. |
+Isso configura **Codex, Claude Code e Antigravity**.
 
-- **Codex:** always start it with `jevcomp codex`. To force a compaction and see it work, type `/compact`.
-- **Claude Code:** prefer `jevcomp claude`. The gateway forwards the original `ANTHROPIC_BASE_URL` (or `https://api.anthropic.com`) and records streaming or JSON token/cache counters in `~/.jevcomp/claude-usage.jsonl`. Bedrock, Vertex, Microsoft Foundry, Claude Platform on AWS, Mantle, host-managed providers and existing HTTP(S) corporate-proxy routes fail open to plain Claude Code while the compaction hook remains active.
-- **Antigravity:** `jevcomp install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the warning. It needs OpenSSL; jevcomp also discovers the copy bundled with Git for Windows, or you can set `JEVCOMP_OPENSSL` explicitly. Without the certificate, `jevcomp agy` opens plain Antigravity. `JEVCOMP_CAPTURE=1` saves the original requests it sees. Jev only edits unambiguous string tool results; unknown or ambiguous shapes pass through unchanged.
-- **Dashboard:** http://127.0.0.1:43127/ opens with Codex, Claude Code and Antigravity sessions; `jevcomp dashboard` opens it by hand.
+### Instalar somente no Codex, Claude Code ou Antigravity
+
+```powershell
+# Codex
+jevcomp install openrouter codex
+jevcomp install typesafe codex
+
+# Claude Code
+jevcomp install openrouter claude
+jevcomp install typesafe claude
+
+# Antigravity
+jevcomp install openrouter agy
+jevcomp install typesafe agy
+```
+
+Escolha o comando correspondente ao **provider** e ao **agente** que você usa.
+
+## Antigravity: certificado
+
+Se instalar para o **Antigravity**, o Windows pedirá permissão para instalar um certificado local do jevcomp.
+
+**Aceite a instalação do certificado.**
+
+## Verificar a instalação
+
+```powershell
+jevcomp doctor
+```
+
+Se tudo estiver correto, você verá algo parecido com:
+
+```text
+OK  API key (openrouter) // ou OK  API key (typesafe)
+OK  Codex: connected
+OK  Claude Code: connected
+OK  Antigravity: connected
+OK  Node v26.x.x
+
+Dashboard: http://127.0.0.1:43127/
+```
+
+## Como usar
+
+```powershell
+# Codex
+jevcomp codex
+
+# Claude Code
+jevcomp claude
+
+# Antigravity
+jevcomp agy
+```
+
+## Dashboard
+
+```text
+http://127.0.0.1:43127/
+```
+
+## Resumo rápido
+
+```powershell
+# 1. Instalar
+npm install -g --install-links github:jevcomp/jevcomp
+
+# 2. Configurar tudo
+jevcomp install openrouter all
+# ou
+jevcomp install typesafe all
+
+# 3. Verificar
+jevcomp doctor
+
+# 4. Usar
+jevcomp codex
+jevcomp claude
+jevcomp agy
+```
+
+Depois de instalar, use `jevcomp` antes do nome do agente.
+
+## How Codex saves tokens
+
+`jevcomp codex [args]` runs Codex through a local proxy. When Jev returns a usable result that meets the minimum reduction setting, the proxy answers Codex's compaction request itself instead of sending it to OpenAI. If Jev fails, or its result is too big or cuts too little, the request goes to OpenAI as usual. In the dashboard, a compaction answered by Jev shows as completed.
 
 ### Claude Code only: as a plugin
 
 Claude Code can also get jevcomp as a plugin, without npm:
 
-```bash
+```powershell
 claude plugin marketplace add jevcomp/jevcomp
 claude plugin install jevcomp@jevcomp
 ```
 
 It saves the same as the npm install. The key comes from one saved by `jevcomp install`, from `OPENROUTER_API_KEY` / `TYPESAFE_API_KEY`, or from `/plugin configure jevcomp@jevcomp` in Claude Code.
-
-## Check
-
-Run `jevcomp doctor` (plugin: ask Claude Code `Check jevcomp`). It is working when the agent shows `jevcomp dashboard: http://127.0.0.1:43127/` as a session starts.
-
-## How Codex saves tokens
-
-`jevcomp codex [args]` runs Codex through a local proxy. When Jev returns a usable result that meets the minimum reduction setting, the proxy answers Codex's compaction request itself instead of sending it to OpenAI. If Jev fails, or its result is too big or cuts too little, the request goes to OpenAI as usual. In the dashboard, a compaction answered by Jev shows as completed.
 
 ## Uninstall
 
