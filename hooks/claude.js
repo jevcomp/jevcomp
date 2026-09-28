@@ -1,4 +1,4 @@
-import { applyJevCut, toJevMessages } from '../dist/claude.js';
+import { applyJevCut } from '../dist/claude.js';
 
 // The module runs without Node, so the Jev work runs in a node process started from this plugin's own dist/.
 function cliPath() {
@@ -9,7 +9,7 @@ function cliPath() {
 async function askJev($, e, options) {
   let sessionId;
   try { sessionId = await $.session.id(); } catch {}
-  const input = JSON.stringify({ sessionId, agentId: e.agentId, trigger: e.trigger, provider: options.provider, apiKey: options.apiKey, messages: toJevMessages(e.messages) });
+  const input = JSON.stringify({ sessionId, agentId: e.agentId, trigger: e.trigger, provider: options.provider, apiKey: options.apiKey, hostMessages: e.messages });
   const run = await $.process.run(['node', cliPath(), 'claude-compact'], { stdin: input, timeoutMs: 300_000 });
   if (run.exitCode !== 0) throw new Error(String(run.stderr).trim() || `jevcomp exited with ${run.exitCode}`);
   return JSON.parse(String(run.stdout));

@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { beginAudit } from './audit.js';
 import { compactMessages, reductionRatio } from './compact.js';
+import { applyJevCut, claudeMessageChars, toJevMessages } from './claude.js';
 import { jevCompactOptions } from './hooks.js';
 import { userSettings } from './settings.js';
 import { tryAppendHistory } from './store.js';
 /** Claude Code hands its transcript over from its function hook; Jev decides what the compacted conversation keeps. */
 export async function compactForClaude(body, baseEnv) {
-    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const hostMessages = Array.isArray(body.hostMessages) ? body.hostMessages : undefined;
+    const messages = hostMessages ? toJevMessages(hostMessages) : Array.isArray(body.messages) ? body.messages : [];
     const provider = body.provider === 'typesafe' ? 'typesafe' : body.provider === 'openrouter' ? 'openrouter' : undefined;
     const apiKey = typeof body.apiKey === 'string' && body.apiKey ? body.apiKey : undefined;
     const env = provider && apiKey ? { ...baseEnv, JEVCOMP_PROVIDER: provider, [provider === 'typesafe' ? 'TYPESAFE_API_KEY' : 'OPENROUTER_API_KEY']: apiKey } : baseEnv;
@@ -24,11 +26,6 @@ export async function compactForClaude(body, baseEnv) {
     }
     try {
         const result = await compactMessages(messages, { ...jev, auditObserver: audit?.observe });
-        if (reductionRatio(result) < minimum) {
-            const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'skipped', stats: result.stats, decisions: result.decisions, detail: `reduction below ${minimum}` }, env);
-            await audit?.finish('rejected', 'below_minimum', recorded);
-            return { apply: false, reason: `reduction below ${Math.round(minimum * 100)}%` };
-        }
         const truncated = {};
         for (const message of result.messages) {
             for (const output of message.toolResults ?? []) {
@@ -36,15 +33,25 @@ export async function compactForClaude(body, baseEnv) {
                     truncated[output.callId] = output.output;
             }
         }
-        const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'prepared', stats: result.stats, decisions: result.decisions, retainedChars: result.stats.charsAfter }, env);
-        const restoreRecorded = await tryAppendHistory({ ...row, at: new Date().toISOString(), phase: 'restore', status: 'restored', stats: result.stats, retainedChars: result.stats.charsAfter, injectedChars: result.stats.charsAfter, injectedPayloadChars: result.stats.charsAfter, detail: 'Claude Code kept the Jev-cut conversation instead of a summary' }, env);
+        const cut = { dropped: result.decisions.filter((d) => d.action === 'drop_call').map((d) => d.callId), truncated };
+        const hostAfter = hostMessages ? applyJevCut(hostMessages, cut) : undefined;
+        const hostBeforeChars = hostMessages ? claudeMessageChars(hostMessages) : result.stats.charsBefore;
+        const hostAfterChars = hostAfter ? claudeMessageChars(hostAfter) : result.stats.charsAfter;
+        const actualReduction = hostBeforeChars ? (hostBeforeChars - hostAfterChars) / hostBeforeChars : reductionRatio(result);
+        const stats = { ...result.stats, charsBefore: hostBeforeChars, charsAfter: hostAfterChars };
+        if (actualReduction < minimum) {
+            const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'skipped', stats, decisions: result.decisions, detail: `reduction below ${minimum}` }, env);
+            await audit?.finish('rejected', 'below_minimum', recorded);
+            return { apply: false, reason: `reduction below ${Math.round(minimum * 100)}%` };
+        }
+        const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'prepared', stats, decisions: result.decisions, retainedChars: hostAfterChars }, env);
+        const restoreRecorded = await tryAppendHistory({ ...row, at: new Date().toISOString(), phase: 'restore', status: 'restored', stats, retainedChars: hostAfterChars, injectedChars: hostAfterChars, injectedPayloadChars: hostAfterChars, detail: 'Claude Code kept the Jev-cut conversation instead of a summary' }, env);
         if (!restoreRecorded)
             audit?.manifest.gaps.push('restore history not recorded');
         const response = {
             apply: true,
-            dropped: result.decisions.filter((d) => d.action === 'drop_call').map((d) => d.callId),
-            truncated,
-            summary: `${Math.round(reductionRatio(result) * 100)}% cut: ${result.stats.callsDropped} removed, ${result.stats.resultsTruncated} shortened`,
+            ...cut,
+            summary: `${Math.round(actualReduction * 100)}% cut: ${result.stats.callsDropped} removed, ${result.stats.resultsTruncated} shortened`,
         };
         await audit?.finish('result_produced', 'cut_returned_to_hook', recorded, response);
         return response;

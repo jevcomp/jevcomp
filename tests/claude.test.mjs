@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyJevCut, toJevMessages } from '../dist/claude.js';
+import { applyJevCut, claudeMessageChars, toJevMessages } from '../dist/claude.js';
+import { compactForClaude } from '../dist/claude-compact.js';
 import { stats } from '../dist/dashboard.js';
 import { handleHook } from '../dist/hooks.js';
 import { setUserSetting } from '../dist/settings.js';
@@ -36,7 +37,8 @@ test('Claude function hook passes the native session identity without adding mod
   const native = { messages: event.messages };
   assert.equal(await callback(context, event, async () => native), native);
   assert.equal(sent.sessionId, 'native-session-id');
-  assert.deepEqual(sent.messages, toJevMessages(event.messages));
+  assert.deepEqual(sent.hostMessages, event.messages);
+  assert.equal('messages' in sent, false);
 });
 
 test('a Jev cut keeps untouched Claude messages as the engine gave them and rebuilds edited ones', () => {
@@ -52,6 +54,55 @@ test('a Jev cut keeps untouched Claude messages as the engine gave them and rebu
   assert.equal('result' in out[1].toolUses[0], false);
   assert.deepEqual(out[2].toolResults, [{ tool_use_id: 'b', text: 'yyy [omitted]', isError: false }]);
   assert.deepEqual(toJevMessages(messages)[2].toolResults.map((r) => r.callId), ['a', 'b']);
+});
+
+test('Claude minimum reduction uses the actual hook payload, including structured result copies', async (t) => {
+  const jev = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const answers = Object.fromEntries(Object.keys(JSON.parse(body).questions).map((key) => [
+      key,
+      { noul: key.startsWith('drop_') ? 0.9 : 0.1 },
+    ]));
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ answers }));
+  });
+  await new Promise((resolve) => jev.listen(0, '127.0.0.1', resolve));
+  t.after(() => jev.close());
+
+  const root = await mkdtemp(join(tmpdir(), 'jev-claude-effective-'));
+  const env = {
+    ...process.env,
+    JEVCOMP_DATA_DIR: join(root, 'data'),
+    JEVCOMP_CONFIG_DIR: join(root, 'config'),
+    JEVCOMP_PROVIDER: 'typesafe',
+    TYPESAFE_API_KEY: 'test',
+    JEV_BASE_URL: `http://127.0.0.1:${jev.address().port}`,
+    JEVCOMP_RETRIES: '0',
+  };
+  for (const name of ['JEVCOMP_PIN_RECENT_MESSAGES', 'JEVCOMP_PRESERVE_RECENT', 'JEVCOMP_LOSS_THRESHOLD', 'JEVCOMP_KEEP_THRESHOLD', 'JEVCOMP_MIN_REDUCTION_RATIO', 'JEVCOMP_MIN_REDUCTION', 'JEVCOMP_SETTINGS_FILE']) delete env[name];
+  await setUserSetting('pin-recent-messages', '0', env, 'claude');
+  await setUserSetting('loss-threshold', '0.5', env, 'claude');
+  await setUserSetting('min-reduction-ratio', '0.3', env, 'claude');
+
+  const duplicate = 'tool evidence '.repeat(350);
+  const hostMessages = [
+    { role: 'user', text: 'u'.repeat(20_000), toolUses: [], handle: 'h0' },
+    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'c1', tool: 'Read', input: { file_path: 'x' }, text: duplicate, result: { stdout: duplicate } }], handle: 'h1' },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'c1', text: duplicate, isError: false, result: { stdout: duplicate } }], handle: 'h2' },
+    { role: 'assistant', text: 'continue', toolUses: [], handle: 'h3' },
+  ];
+  const before = claudeMessageChars(hostMessages);
+  const response = await compactForClaude({ hostMessages }, env);
+  assert.equal(response.apply, true);
+  const afterMessages = applyJevCut(hostMessages, response);
+  const actualReduction = (before - claudeMessageChars(afterMessages)) / before;
+  assert.ok(actualReduction >= 0.3);
+  assert.match(response.summary, /^\d+% cut:/);
+
+  const history = (await readFile(join(root, 'data', 'history.jsonl'), 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(history[0].stats.charsBefore, before);
+  assert.equal(history[0].stats.charsAfter, claudeMessageChars(afterMessages));
 });
 
 test('the claude-compact command runs Jev on a Claude transcript and records it as a Claude run', async (t) => {

@@ -15,6 +15,20 @@ export function toJevMessages(messages: readonly ClaudeMessage[]): Message[] {
   }));
 }
 
+function valueChars(value: unknown): number {
+  if (value === undefined) return 0;
+  if (typeof value === 'string') return value.length;
+  try { return JSON.stringify(value).length; } catch { return 0; }
+}
+
+/** Content-bearing characters in the actual Claude hook messages, excluding internal handles and object-key overhead. */
+export function claudeMessageChars(messages: readonly ClaudeMessage[]): number {
+  return messages.reduce((sum, message) => sum
+    + message.text.length
+    + message.toolUses.reduce((n, use) => n + valueChars(use.input) + valueChars(use.text) + valueChars(use.result), 0)
+    + (message.toolResults ?? []).reduce((n, result) => n + result.text.length + valueChars(result.result), 0), 0);
+}
+
 /** Messages Jev left alone go back as the engine's own objects; edited ones are rebuilt without the engine's handle. */
 export function applyJevCut(messages: readonly ClaudeMessage[], cut: JevCut): ClaudeMessage[] {
   const dropped = new Set(cut.dropped);
