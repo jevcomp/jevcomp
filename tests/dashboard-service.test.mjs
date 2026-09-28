@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureDashboard, restartDashboard, runningDashboard } from '../dist/dashboard-service.js';
 import { handleHook } from '../dist/hooks.js';
+import { VERSION } from '../dist/version.js';
 
 async function freePort() {
   const server = createServer();
@@ -65,6 +66,30 @@ test('a dashboard left by another installed version is replaced', async (t) => {
   const current = await runningDashboard(port, env);
   assert.notEqual(current.pid, older.pid);
   assert.equal(current.entry.toLowerCase(), fileURLToPath(new URL('../dist/cli.js', import.meta.url)).toLowerCase());
+});
+
+test('an older dashboard is replaced even when the CLI path is unchanged', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-dashboard-same-path-upgrade-'));
+  const port = await freePort();
+  const env = { ...process.env, JEVCOMP_DATA_DIR: join(root, 'data') };
+  const sameCli = join(root, 'same', 'dist', 'cli.js');
+  await cp(fileURLToPath(new URL('../dist', import.meta.url)), dirname(sameCli), { recursive: true });
+  await writeFile(join(root, 'same', 'package.json'), '{"type":"module"}');
+  await writeFile(join(dirname(sameCli), 'version.js'), "export const VERSION = '0.0.1';");
+  t.after(async () => {
+    const running = await runningDashboard(port, env);
+    if (running) process.kill(running.pid);
+  });
+
+  await restartDashboard(port, env, sameCli);
+  const older = await runningDashboard(port, env);
+  assert.equal(older.version, '0.0.1');
+
+  await writeFile(join(dirname(sameCli), 'version.js'), `export const VERSION = '${VERSION}';`);
+  await ensureDashboard(port, env, sameCli);
+  const current = await runningDashboard(port, env);
+  assert.notEqual(current.pid, older.pid);
+  assert.equal(current.version, VERSION);
 });
 
 test('the same version installed for another agent reuses the running dashboard', async (t) => {

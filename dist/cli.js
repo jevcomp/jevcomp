@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { compactForClaude } from './claude-compact.js';
 import { runCodex } from './codex-proxy.js';
 import { commandExists, runSync } from './command.js';
-import { installAgyCa, runAgy, uninstallAgyCa } from './agy-proxy.js';
+import { agyCaInstalled, agyCertificateThumbprint, installAgyCa, runAgy, uninstallAgyCa } from './agy-proxy.js';
 import { compactMessages, reductionRatio } from './compact.js';
 import { startDashboard } from './dashboard.js';
 import { dashboardInstancePath, dashboardPort, ensureDashboard, restartDashboard, runningDashboard, stopDashboard } from './dashboard-service.js';
@@ -170,6 +170,9 @@ async function readiness() {
     const config = providerConfig({ provider, env: process.env });
     const marker = join(configDir(process.env), 'codex-installed');
     const codexInstalled = existsSync(marker);
+    const claudeInstalled = claudePluginInstalled();
+    const agyThumbprint = await agyCertificateThumbprint(process.env);
+    const agyInstalled = !!agyThumbprint && agyCaInstalled(agyThumbprint);
     const settings = userSettings(process.env, 'codex');
     return {
         node: process.version ?? 'unknown',
@@ -178,9 +181,19 @@ async function readiness() {
         model: config.model,
         baseUrl: config.baseUrl,
         codexInstalled,
+        agents: {
+            codex: { command: commandExists('codex'), connected: codexInstalled },
+            claude: { command: commandExists('claude'), connected: claudeInstalled },
+            agy: { command: commandExists('agy'), connected: agyInstalled },
+        },
         dataDir: dataDir(process.env),
         dashboardUrl: (await runningDashboard(dashboardPort(process.env), process.env))?.url ?? null,
         settings,
+        settingsByAgent: {
+            codex: settings,
+            claude: userSettings(process.env, 'claude'),
+            agy: userSettings(process.env, 'agy'),
+        },
     };
 }
 function printSettings(agent) {
@@ -234,31 +247,35 @@ async function install(args) {
         console.log(`Dashboard: ${dashboardAddress()} (opens with ${sessions})`);
 }
 async function uninstall(args) {
-    if (args.includes('agy') || args.includes('all') || !args.length)
-        await uninstallAgyCa();
-    if (args.length === 1 && args[0] === 'agy')
-        return;
-    args = args.filter((arg) => arg !== 'agy');
-    const agents = agentArgs(args) ?? ['codex', 'claude'];
+    const requested = agentArgs(args);
+    if (args.length && !requested)
+        throw new Error('usage: jevcomp uninstall [codex|claude|agy|all|both]');
+    const agents = requested ?? ['codex', 'claude', 'agy'];
     const claudeInstalled = claudePluginInstalled();
     const codexMarker = join(configDir(process.env), 'codex-installed');
-    const codexStays = !agents.includes('codex') && existsSync(codexMarker);
-    // The dashboard serves both agents, so it keeps running while one of them still uses jevcomp.
-    if (!codexStays && !(claudeInstalled && !agents.includes('claude')))
+    const codexInstalled = existsSync(codexMarker);
+    const agyThumbprint = await agyCertificateThumbprint(process.env);
+    const agyInstalled = !!agyThumbprint && agyCaInstalled(agyThumbprint);
+    if (agents.includes('agy'))
+        await uninstallAgyCa();
+    const codexStays = codexInstalled && !agents.includes('codex');
+    const claudeStays = claudeInstalled && !agents.includes('claude');
+    const agyStays = agyInstalled && !agents.includes('agy');
+    if (!codexStays && !claudeStays && !agyStays)
         await stopDashboard(dashboardPort(process.env), process.env);
+    if (agents.includes('agy'))
+        console.log(agyInstalled ? 'jevcomp was removed from Antigravity.' : 'jevcomp was not installed in Antigravity.');
     if (agents.includes('claude')) {
         if (claudeInstalled)
             removeClaudePlugin();
         console.log(claudeInstalled ? 'jevcomp was removed from Claude Code.' : 'jevcomp was not installed in Claude Code.');
     }
-    if (!agents.includes('codex')) {
-        console.log(`Kept your key and settings: ${configDir(process.env)}`);
-        return;
+    if (agents.includes('codex')) {
+        await removeLegacyHooks();
+        await rm(runtimeDir(process.env), { recursive: true, force: true });
+        await rm(codexMarker, { force: true });
+        console.log(codexInstalled ? 'jevcomp was removed from Codex.' : 'jevcomp was not installed in Codex.');
     }
-    await removeLegacyHooks();
-    await rm(runtimeDir(process.env), { recursive: true, force: true });
-    await rm(codexMarker, { force: true });
-    console.log('jevcomp was removed from Codex.');
     console.log(`Kept your key and settings: ${configDir(process.env)}`);
     console.log(`Kept your history: ${dataDir(process.env)}`);
     console.log('Delete those folders to erase them too.');
@@ -324,13 +341,21 @@ async function main() {
         }
         console.log(`jevcomp doctor\n`);
         console.log(`${value.apiKeyConfigured ? 'OK' : 'MISSING'}  API key (${value.provider})`);
-        console.log(`${value.codexInstalled ? 'OK' : 'MISSING'}  Codex: ${value.codexInstalled ? 'installed' : 'not installed'}`);
+        for (const agent of ['codex', 'claude', 'agy']) {
+            const status = value.agents[agent];
+            const label = AGENT_NAMES[agent];
+            const detail = status.connected ? 'connected' : status.command ? 'command found, not connected' : 'command not found';
+            console.log(`${status.connected ? 'OK' : 'MISSING'}  ${label}: ${detail}`);
+        }
         console.log(`OK  Node ${value.node}`);
         console.log(`    Model: ${value.model}`);
         console.log(`    Data:  ${value.dataDir}`);
-        console.log(`    Dashboard: ${value.dashboardUrl ?? `${dashboardAddress()} (not running; starts with the next Codex session)`}`);
-        console.log(`    Pruning: loss <= ${value.settings.lossThreshold.toFixed(2)} · pin ${fmt(value.settings.pinRecentMessages)} recent messages · require ${(value.settings.minReductionRatio * 100).toFixed(0)}% reduction`);
-        if (!value.apiKeyConfigured || !value.codexInstalled) {
+        console.log(`    Dashboard: ${value.dashboardUrl ?? `${dashboardAddress()} (not running; starts with the next connected agent session)`}`);
+        for (const agent of ['codex', 'claude', 'agy']) {
+            const settings = value.settingsByAgent[agent];
+            console.log(`    ${AGENT_NAMES[agent]} pruning: loss <= ${settings.lossThreshold.toFixed(2)} · pin ${fmt(settings.pinRecentMessages)} recent messages · require ${(settings.minReductionRatio * 100).toFixed(0)}% reduction`);
+        }
+        if (!value.apiKeyConfigured || !Object.values(value.agents).some((status) => status.connected)) {
             console.log(`\nFix: jevcomp install`);
         }
         return;

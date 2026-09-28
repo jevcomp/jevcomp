@@ -468,7 +468,7 @@ const agentList=s=>[...new Set((s.runs||[]).map(r=>'o '+(HOST[r.host]||'Codex'))
 const agents=s=>agentList(s).join(' e ')||'o Codex';
 const agentVerb=(s,one,many)=>agentList(s).length>1?many:one;
 const CLAUDE_STATUS={restored:['ok','Cortado pelo Jev','O Claude Code ficou com a conversa cortada pelo Jev no lugar do resumo.']};
-const statusPill=r=>{const claude=r.host==='claude';if(r.directCompaction&&r.status==='restored')return '<span class="pill ok" title="O Jev retornou o texto cortado como resposta à compactação do Codex.">Cortado pelo Jev</span>';const[cls,label,help]=((claude&&CLAUDE_STATUS[r.status])||STATUS[r.status]||STATUS.prepared).map(t=>{t=t.replace('Codex',HOST[r.host]||'Codex');return claude?t.replace('Não enviado','Sem corte'):t});const detail=r.status==='failed'&&r.detail?help+' Motivo: '+r.detail:help;return '<span class="pill '+cls+'" title="'+esc(detail)+'">'+label+'</span>'};
+const statusPill=r=>{const claude=r.host==='claude';if(r.directCompaction&&r.status==='restored')return '<span class="pill ok" title="'+(r.host==='agy'?'O Jev encurtou evidência antiga antes desta geração do Antigravity.':'O Jev retornou o texto cortado como resposta à compactação do Codex.')+'">Cortado pelo Jev</span>';const[cls,label,help]=((claude&&CLAUDE_STATUS[r.status])||STATUS[r.status]||STATUS.prepared).map(t=>{t=t.replace('Codex',HOST[r.host]||'Codex');return claude?t.replace('Não enviado','Sem corte'):t});const detail=r.status==='failed'&&r.detail?help+' Motivo: '+r.detail:help;return '<span class="pill '+cls+'" title="'+esc(detail)+'">'+label+'</span>'};
 const decisionPill=k=>'<span class="pill '+DECISION[k][0]+'">'+DECISION[k][1]+'</span>';
 
 let lastRun=null,lastRunJson='',tapeFocus=null,tapeSegs=[];
@@ -487,8 +487,8 @@ function renderLastRun(last){
  const json=JSON.stringify(last);
  if(json===lastRunJson)return;
  lastRunJson=json;lastRun=last;
- if(!last){$('#last-title').textContent='Última compactação';$('#last-legend').innerHTML='';$('#last-run').innerHTML='<p class="empty">Ainda não houve compactação com o Jev.</p>';return}
- $('#last-title').textContent='Última compactação · '+stamp(last.at);
+ if(!last){$('#last-title').textContent=agent==='agy'?'Último corte':'Última compactação';$('#last-legend').innerHTML='';$('#last-run').innerHTML='<p class="empty">'+(agent==='agy'?'Ainda não houve corte com o Jev.':'Ainda não houve compactação com o Jev.')+'</p>';return}
+ $('#last-title').textContent=(last.host==='agy'?'Último corte':'Última compactação')+' · '+stamp(last.at);
  const count=k=>last.blocks.filter(b=>b.decision===k).length;
  $('#last-legend').innerHTML=Object.entries(DECISION).map(([k,[cls,label]])=>'<span class="pill '+cls+'" data-focus="'+k+'">'+label+' <span class="sep">·</span> '+count(k)+'</span>').join('');
  tapeSegs=tapeSegments(last.blocks,$('#last-run').clientWidth||1000);
@@ -498,7 +498,7 @@ function renderLastRun(last){
  const sent=last.status==='restored'
   ?'<span class="sent-bar"><i style="width:'+Math.max(1,Math.min(100,returnedChars/Math.max(1,last.charsBefore)*100))+'%"></i></span><span class="num">'+f(returnedChars)+' de '+chars(last.charsBefore)+'</span>'
   :'<span></span>'+statusPill(last);
- $('#last-run').innerHTML=tape+'<div class="sent"><span class="sent-label">'+(last.host==='claude'?'Conversa que ficou no Claude Code depois do corte':last.directCompaction?'Texto retornado ao Codex depois do corte':'Enviado ao '+(HOST[last.host]||'Codex')+' depois da compactação')+'</span>'+sent+'</div>';
+ $('#last-run').innerHTML=tape+'<div class="sent"><span class="sent-label">'+(last.host==='claude'?'Conversa que ficou no Claude Code depois do corte':last.host==='agy'?'Requisição enviada ao Antigravity depois do corte':last.directCompaction?'Texto retornado ao Codex depois do corte':'Enviado ao '+(HOST[last.host]||'Codex')+' depois da compactação')+'</span>'+sent+'</div>';
 }
 function setTapeFocus(k){tapeFocus=k;const tape=$('.tape');if(!tape)return;if(k)tape.dataset.focus=k;else delete tape.dataset.focus}
 $('#last-legend').addEventListener('mouseover',e=>{const tag=e.target.closest('[data-focus]');if(tag)setTapeFocus(tag.dataset.focus)});
@@ -525,16 +525,16 @@ function renderKpis(s){
  const claude=agent==='claude'||s.directCompactions>0;
  const parts=[[n('restored'),claude?'cortada':'com envio',claude?'cortadas':'com envio'],[n('nothing_missing')+n('skipped')+n('too_short'),claude?'sem corte':'não enviada',claude?'sem corte':'não enviadas'],[n('failed')+n('restore_failed'),'com erro','com erro'],[n('prepared')+n('ready'),'aguardando','aguardando']].filter(p=>p[0]>0).map(p=>plural(p[0],p[1],p[2]));
  $('#kpis').innerHTML=[
-  kpi('Redução média',s.restored?pct(s.completedReductionRatio):'—',s.restored?'nas '+plural(s.restored,'compactação','compactações')+' em que o Jev cortou':'ainda sem compactação concluída',true),
-  kpi('Compactações',f(s.attempts),parts.join(' · ')||'nenhuma ainda'),
+  kpi('Redução média',s.restored?pct(s.completedReductionRatio):'—',s.restored?'nos '+plural(s.restored,agent==='agy'?'corte':'compactação',agent==='agy'?'cortes':'compactações')+' em que o Jev cortou':agent==='agy'?'ainda sem corte concluído':'ainda sem compactação concluída',true),
+  kpi(agent==='agy'?'Cortes':'Compactações',f(s.attempts),parts.join(' · ')||'nenhum ainda'),
   kpi('Chamadas ao Jev',f(s.jevRequests),s.jevUsageReportedRequests?f(s.jevInputTokens)+' tokens de entrada':'o provedor não informou os tokens'),
   kpi('Texto retirado',s.restored?f(s.completedCharsRemoved):'—','caracteres que '+agents(s)+' '+agentVerb(s,'deixou','deixaram')+' de carregar a cada nova mensagem')
  ].join('');
 }
 function renderFlow(s){
  const hosts=[...new Set((s.runs||[]).filter(r=>r.status==='restored').map(r=>HOST[r.host]||'Codex'))].join(' e ao ')||'Codex';
- $('#flow-foot').textContent='O Jev escolhe o que guardar da conversa para '+agents(s)+' '+agentVerb(s,'continuar','continuarem')+' depois da compactação.';
- if(!s.restored){$('#flow').innerHTML='<p class="empty">Ainda sem compactação concluída.</p>';return}
+ $('#flow-foot').textContent=agent==='agy'?'O Jev encurta evidência antiga antes das gerações do Antigravity.':'O Jev escolhe o que guardar da conversa para '+agents(s)+' '+agentVerb(s,'continuar','continuarem')+' depois da compactação.';
+ if(!s.restored){$('#flow').innerHTML='<p class="empty">'+(agent==='agy'?'Ainda sem corte concluído.':'Ainda sem compactação concluída.')+'</p>';return}
  const read=s.completedCharsBefore,kept=s.completedCharsAfter,sent=s.deliveredChars,direct=s.directCompactions>0;
  const step=(label,n,hint)=>'<div class="flow-step"><span class="label">'+label+'</span><b class="num">'+f(n)+'</b><span class="hint">'+hint+'</span></div>';
  const arrow=(n,note)=>'<div class="flow-arrow"><span aria-hidden="true">→</span><span class="flow-note"><b class="num">−'+f(n)+'</b><br>'+note+'</span></div>';
@@ -542,8 +542,8 @@ function renderFlow(s){
   +step('Texto da conversa analisado',read,'caracteres antes do corte')
   +arrow(Math.max(0,read-kept),'cortados pelo Jev')
   +step('Mantido pelo Jev',kept,'o que ainda é útil; o resto foi cortado')
-  +(agent==='claude'?'':(direct?'<div class="flow-arrow"><span aria-hidden="true">→</span><span class="flow-note">texto preparado para envio</span></div>':arrow(Math.max(0,kept-sent),'já no resumo ou acima do limite'))
-  +step((direct?'Texto entregue ao ':'Enviado ao ')+hosts,sent,direct?'texto retornado pela compactação e eventuais envios antigos':'o que o resumo perdeu, dentro do limite'))+'</div>';
+  +(agent==='claude'?'':(direct?'<div class="flow-arrow"><span aria-hidden="true">→</span><span class="flow-note">'+(agent==='agy'?'request preparado para geração':'texto preparado para envio')+'</span></div>':arrow(Math.max(0,kept-sent),'já no resumo ou acima do limite'))
+  +step((direct?(agent==='agy'?'Enviado ao ':'Texto entregue ao '):'Enviado ao ')+hosts,sent,direct?(agent==='agy'?'request já reduzido antes da geração':'texto retornado pela compactação e eventuais envios antigos'):'o que o resumo perdeu, dentro do limite'))+'</div>';
 }
 function renderRuns(runs){
  const shown=runs.filter(r=>r.status!=='ready'&&r.status!=='prepared').slice(0,10),max=Math.max(1,...shown.map(r=>r.charsBefore||0));

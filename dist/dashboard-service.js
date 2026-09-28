@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LEGACY_DASHBOARD_SERVICE } from './legacy.js';
 import { dataDir } from './store.js';
@@ -151,15 +151,16 @@ export async function restartDashboard(port, env = process.env, cliPath = defaul
     await stopDashboard(port, env);
     return spawnDashboard(port, env, cliPath);
 }
-function samePath(left, right) {
-    const normalize = (path) => (process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path));
-    return normalize(left) === normalize(right);
-}
 function olderThanOurs(version) {
-    if (!version)
+    const parts = (value) => {
+        if (!value)
+            return undefined;
+        const parsed = value.split('.').map(Number);
+        return parsed.length > 0 && parsed.every((part) => Number.isInteger(part) && part >= 0) ? parsed : undefined;
+    };
+    const theirs = parts(version), ours = parts(VERSION);
+    if (!theirs || !ours)
         return true;
-    const parts = (value) => value.split('.').map(Number);
-    const [theirs, ours] = [parts(version), parts(VERSION)];
     for (let i = 0; i < Math.max(theirs.length, ours.length); i++) {
         const difference = (theirs[i] ?? 0) - (ours[i] ?? 0);
         if (difference)
@@ -171,7 +172,7 @@ function olderThanOurs(version) {
 export async function ensureDashboard(port, env = process.env, cliPath = defaultCliPath) {
     // The Codex and Claude Code plugins each start their own copy, so any of ours at least this new serves both.
     const running = await runningDashboard(port, env) ?? await untrackedDashboard(port);
-    if (running && ((running.entry && samePath(running.entry, cliPath)) || !olderThanOurs(running.version)))
+    if (running && !olderThanOurs(running.version))
         return running.url;
     if (running)
         await stopProcess(running, port);
