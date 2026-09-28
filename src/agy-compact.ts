@@ -144,7 +144,7 @@ function collectRefs(contents: readonly unknown[]): { calls: PartRef[]; response
         calls.push({ contentIndex, partIndex, kind, name: refName(call), id: strings(call.id), value: call });
       }
       for (const [kind, key, resultKeys] of [
-        ['function', 'functionResponse', ['result']],
+        ['function', 'functionResponse', ['result', 'output', 'text', 'responseJson', 'response_json']],
         ['tool', 'toolResponse', ['responseJson', 'response_json', 'result', 'output', 'text']],
       ] as const) {
         if (!record(part[key])) continue;

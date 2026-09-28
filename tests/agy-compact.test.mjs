@@ -59,6 +59,29 @@ test('Antigravity truncation edits only the paired string result and preserves G
   assert.match(response.response.result, /jevcomp omitted/);
 });
 
+test('Antigravity supports current run_command functionResponse.response.output', async () => {
+  const original = payload();
+  const call = original.request.contents[1].parts[0].functionCall;
+  call.name = 'run_command';
+  call.args = { CommandLine: 'echo probe', Cwd: 'D:/repo', WaitMsBeforeAsync: 1000, toolAction: 'probe', toolSummary: 'probe' };
+  const response = original.request.contents[2].parts[0].functionResponse;
+  response.name = 'run_command';
+  response.response = { output: 'HEAD\n' + 'bulk '.repeat(1000) + '\nTAIL', metadata: 'keep' };
+  const result = await compactAgyPayload(original, askerFor(0.9, 0.1), createAgyCompactionState(), {
+    preserveRecentMessages: 0,
+    truncateHeadChars: 60,
+    truncateTailChars: 60,
+    minEligibleChars: 0,
+    minReductionRatio: 0,
+  });
+  assert.equal(result.changed, true);
+  const output = result.payload.request.contents[2].parts[0].functionResponse.response.output;
+  assert.match(output, /^HEAD/);
+  assert.match(output, /TAIL$/);
+  assert.match(output, /jevcomp omitted/);
+  assert.equal(result.payload.request.contents[2].parts[0].functionResponse.response.metadata, 'keep');
+});
+
 test('Antigravity supports the current toolCall/toolResponse wire shape', async () => {
   const original = {
     project: 'project',
