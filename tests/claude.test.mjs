@@ -41,11 +41,15 @@ test('Claude function hook passes the native session identity without adding mod
 
 test('a Jev cut keeps untouched Claude messages as the engine gave them and rebuilds edited ones', () => {
   const messages = transcript();
+  messages[1].toolUses[1].result = { stdout: 'y'.repeat(4000), metadata: 'large structured copy' };
+  messages[2].toolResults[1].result = { stdout: 'y'.repeat(4000), metadata: 'large structured copy' };
   const out = applyJevCut(messages, { dropped: ['a'], truncated: { b: 'yyy [omitted]' } });
   assert.equal(out[0], messages[0]);
   assert.equal(out[3], messages[3]);
   assert.equal(out[1].handle, undefined);
   assert.deepEqual(out[1].toolUses.map((u) => u.tool_use_id), ['b']);
+  assert.equal(out[1].toolUses[0].text, 'yyy [omitted]');
+  assert.equal('result' in out[1].toolUses[0], false);
   assert.deepEqual(out[2].toolResults, [{ tool_use_id: 'b', text: 'yyy [omitted]', isError: false }]);
   assert.deepEqual(toJevMessages(messages)[2].toolResults.map((r) => r.callId), ['a', 'b']);
 });

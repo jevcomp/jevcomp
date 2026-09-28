@@ -13,7 +13,12 @@ export function applyJevCut(messages, cut) {
     for (const message of messages) {
         const toolUses = message.toolUses
             .filter((use) => !dropped.has(use.tool_use_id))
-            .map((use) => (use.tool_use_id in cut.truncated ? { ...use, text: cut.truncated[use.tool_use_id] } : use));
+            .map((use) => {
+            if (!(use.tool_use_id in cut.truncated))
+                return use;
+            const { result: _result, ...rest } = use;
+            return { ...rest, text: cut.truncated[use.tool_use_id] };
+        });
         const toolResults = (message.toolResults ?? [])
             .filter((result) => !dropped.has(result.tool_use_id))
             .map((result) => (result.tool_use_id in cut.truncated ? { tool_use_id: result.tool_use_id, text: cut.truncated[result.tool_use_id], isError: result.isError } : result));
