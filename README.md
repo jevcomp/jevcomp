@@ -10,15 +10,15 @@ jevcomp uses **Jev**, a small, fast AI model that only answers yes/no questions,
 
 Your own messages are never removed. If anything fails, the original agent request passes through or native compaction runs normally. Jev is called only for eligible old tool evidence, billed to your OpenRouter or TypeSafe key.
 
-## Instalação
+## Installation
 
-Primeiro, instale o jevcomp:
+First, install jevcomp:
 
 ```powershell
 npm install -g --install-links github:jevcomp/jevcomp
 ```
 
-### Instalar em todos os agentes
+### Install for all agents
 
 ```powershell
 # OpenRouter
@@ -28,9 +28,9 @@ jevcomp install openrouter all
 jevcomp install typesafe all
 ```
 
-Isso configura **Codex, Claude Code e Antigravity**.
+This configures **Codex, Claude Code, and Antigravity**.
 
-### Instalar somente no Codex, Claude Code ou Antigravity
+### Install only for Codex, Claude Code, or Antigravity
 
 ```powershell
 # Codex
@@ -46,24 +46,24 @@ jevcomp install openrouter agy
 jevcomp install typesafe agy
 ```
 
-Escolha o comando correspondente ao **provider** e ao **agente** que você usa.
+Choose the command that matches the **provider** and **agent** you use.
 
-## Antigravity: certificado
+## Antigravity certificate
 
-Se instalar para o **Antigravity**, o Windows pedirá permissão para instalar um certificado local do jevcomp.
+If you install jevcomp for **Antigravity**, Windows will ask for permission to install a local jevcomp certificate.
 
-**Aceite a instalação do certificado.**
+**Accept the certificate installation.**
 
-## Verificar a instalação
+## Verify the installation
 
 ```powershell
 jevcomp doctor
 ```
 
-Se tudo estiver correto, você verá algo parecido com:
+If everything is working, you should see something like:
 
 ```text
-OK  API key (openrouter) // ou OK  API key (typesafe)
+OK  API key (openrouter) // or OK  API key (typesafe)
 OK  Codex: connected
 OK  Claude Code: connected
 OK  Antigravity: connected
@@ -72,7 +72,7 @@ OK  Node v26.x.x
 Dashboard: http://127.0.0.1:43127/
 ```
 
-## Como usar
+## How to use
 
 ```powershell
 # Codex
@@ -91,27 +91,27 @@ jevcomp agy
 http://127.0.0.1:43127/
 ```
 
-## Resumo rápido
+## Quick start
 
 ```powershell
-# 1. Instalar
+# 1. Install
 npm install -g --install-links github:jevcomp/jevcomp
 
-# 2. Configurar tudo
+# 2. Configure everything
 jevcomp install openrouter all
-# ou
+# or
 jevcomp install typesafe all
 
-# 3. Verificar
+# 3. Verify
 jevcomp doctor
 
-# 4. Usar
+# 4. Use
 jevcomp codex
 jevcomp claude
 jevcomp agy
 ```
 
-Depois de instalar, use `jevcomp` antes do nome do agente.
+After installation, use `jevcomp` before the agent name.
 
 ## How Codex saves tokens
 
@@ -155,7 +155,7 @@ It shows only what jevcomp can measure: characters before and after each compact
 
 ## Settings
 
-Run `jevcomp settings`, use the **Configurações** page of the dashboard, or ask the agent to change a jevcomp setting. Each program has its own settings. The defaults suit most people.
+Run `jevcomp settings`, use the **Settings** page of the dashboard, or ask the agent to change a jevcomp setting. Each program has its own settings. The defaults suit most people.
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
