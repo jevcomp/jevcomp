@@ -30,3 +30,4 @@ declare module 'node:crypto' { export const createHash: any; export const random
 declare module 'node:child_process' { export const execFileSync: any; export const spawn: any; }
 declare module 'node:readline/promises' { export const createInterface: any; }
 declare module 'node:zlib' { export const gzipSync: any; export const gunzipSync: any; }
+declare module 'node:string_decoder' { export class StringDecoder { constructor(encoding?: string); write(buffer: any): string; end(buffer?: any): string; } }

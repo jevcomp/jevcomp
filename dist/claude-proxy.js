@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer, request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { StringDecoder } from 'node:string_decoder';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dataDir } from './store.js';
@@ -21,42 +22,58 @@ function usageFrom(value) {
 }
 class SseUsageTap {
     buffer = '';
+    decoder = new StringDecoder('utf8');
     model;
     usage = {};
     push(chunk) {
-        this.buffer += chunk.toString('utf8');
-        for (;;) {
-            const match = /\r?\n\r?\n/.exec(this.buffer);
-            if (!match)
-                break;
-            const event = this.buffer.slice(0, match.index);
-            this.buffer = this.buffer.slice(match.index + match[0].length);
-            for (const line of event.split(/\r?\n/)) {
-                if (!line.startsWith('data:'))
-                    continue;
-                const data = line.slice(5).trim();
-                if (!data || data === '[DONE]')
-                    continue;
-                try {
-                    this.observe(JSON.parse(data));
-                }
-                catch { }
-            }
-        }
-        if (this.buffer.length > 256_000)
-            this.buffer = this.buffer.slice(-64_000);
+        this.buffer += this.decoder.write(chunk);
+        this.consume(false);
+    }
+    finish() {
+        this.buffer += this.decoder.end();
+        this.consume(true);
     }
     observe(value) {
         if (!value || typeof value !== 'object')
             return;
         const event = value;
         const message = event.message && typeof event.message === 'object' ? event.message : undefined;
-        if (typeof message?.model === 'string')
-            this.model = message.model;
+        const model = message?.model ?? event.model;
+        if (typeof model === 'string')
+            this.model = model;
         const next = usageFrom(message?.usage ?? event.usage);
         for (const [key, amount] of Object.entries(next)) {
             if (amount !== undefined)
                 this.usage[key] = amount;
+        }
+    }
+    consume(final) {
+        for (;;) {
+            const match = /\r?\n\r?\n/.exec(this.buffer);
+            if (!match)
+                break;
+            this.observeEvent(this.buffer.slice(0, match.index));
+            this.buffer = this.buffer.slice(match.index + match[0].length);
+        }
+        if (final && this.buffer.trim()) {
+            this.observeEvent(this.buffer);
+            this.buffer = '';
+        }
+        else if (this.buffer.length > 256_000) {
+            this.buffer = this.buffer.slice(-64_000);
+        }
+    }
+    observeEvent(event) {
+        for (const line of event.split(/\r?\n/)) {
+            if (!line.startsWith('data:'))
+                continue;
+            const data = line.slice(5).trim();
+            if (!data || data === '[DONE]')
+                continue;
+            try {
+                this.observe(JSON.parse(data));
+            }
+            catch { }
         }
     }
 }
@@ -70,9 +87,15 @@ async function appendUsage(row, env) {
 }
 function forwardHeaders(headers) {
     const out = { ...headers };
-    delete out.host;
-    delete out.connection;
-    delete out['proxy-connection'];
+    const connectionTokens = typeof headers.connection === 'string'
+        ? headers.connection.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean)
+        : [];
+    for (const name of [
+        'host', 'connection', 'proxy-connection', 'keep-alive', 'proxy-authenticate',
+        'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade',
+        ...connectionTokens,
+    ])
+        delete out[name];
     return out;
 }
 function upstreamUrl(base, incoming) {
@@ -83,11 +106,22 @@ function upstreamUrl(base, incoming) {
     target.search = requestUrl.search;
     return target;
 }
+function envEnabled(value) {
+    return !!value?.trim() && !/^(?:0|false|no|off)$/i.test(value.trim());
+}
 export function claudeProxyUnsupportedReason(env) {
-    if (env.CLAUDE_CODE_USE_BEDROCK === '1' || env.ANTHROPIC_BEDROCK_BASE_URL)
+    if (envEnabled(env.CLAUDE_CODE_USE_BEDROCK) || env.ANTHROPIC_BEDROCK_BASE_URL)
         return 'Bedrock routing is active';
-    if (env.CLAUDE_CODE_USE_VERTEX === '1' || env.ANTHROPIC_VERTEX_BASE_URL)
+    if (envEnabled(env.CLAUDE_CODE_USE_VERTEX) || env.ANTHROPIC_VERTEX_BASE_URL)
         return 'Vertex routing is active';
+    if (envEnabled(env.CLAUDE_CODE_USE_FOUNDRY) || env.ANTHROPIC_FOUNDRY_BASE_URL)
+        return 'Microsoft Foundry routing is active';
+    if (envEnabled(env.CLAUDE_CODE_USE_ANTHROPIC_AWS))
+        return 'Claude Platform on AWS routing is active';
+    if (envEnabled(env.CLAUDE_CODE_USE_MANTLE))
+        return 'Bedrock Mantle routing is active';
+    if (envEnabled(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST))
+        return 'provider routing is managed by the host';
     if (env.HTTP_PROXY || env.HTTPS_PROXY || env.http_proxy || env.https_proxy)
         return 'an HTTP(S) corporate proxy is already configured';
     return undefined;
@@ -103,12 +137,37 @@ export async function startClaudeProxy(env = process.env) {
         const target = upstreamUrl(base, req.url ?? '/');
         const forward = requestFn(target, { method: req.method, headers: forwardHeaders(req.headers) }, (upstream) => {
             const tap = new SseUsageTap();
-            const canInspect = !upstream.headers['content-encoding'] &&
-                String(upstream.headers['content-type'] ?? '').toLowerCase().includes('text/event-stream');
+            const contentType = String(upstream.headers['content-type'] ?? '').toLowerCase();
+            const inspectable = !upstream.headers['content-encoding'];
+            const inspectSse = inspectable && contentType.includes('text/event-stream');
+            const inspectJson = inspectable && contentType.includes('application/json');
+            const jsonChunks = [];
+            let jsonBytes = 0;
+            let jsonOverflow = false;
             res.writeHead(upstream.statusCode ?? 502, forwardHeaders(upstream.headers));
-            if (canInspect)
-                upstream.on('data', (chunk) => tap.push(Buffer.from(chunk)));
+            upstream.on('data', (chunk) => {
+                const bytes = Buffer.from(chunk);
+                if (inspectSse)
+                    tap.push(bytes);
+                if (inspectJson && !jsonOverflow) {
+                    jsonBytes += bytes.length;
+                    if (jsonBytes <= 8 * 1024 * 1024)
+                        jsonChunks.push(bytes);
+                    else {
+                        jsonOverflow = true;
+                        jsonChunks.length = 0;
+                    }
+                }
+            });
             upstream.once('end', () => {
+                if (inspectSse)
+                    tap.finish();
+                if (inspectJson && !jsonOverflow && jsonChunks.length) {
+                    try {
+                        tap.observe(JSON.parse(Buffer.concat(jsonChunks).toString('utf8')));
+                    }
+                    catch { }
+                }
                 void appendUsage({
                     at: new Date().toISOString(),
                     model: tap.model,

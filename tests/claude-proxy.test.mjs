@@ -28,9 +28,12 @@ test('Claude gateway forwards Anthropic traffic unchanged and records streaming 
   let seen;
   const upstream = createServer(async (req, res) => {    let body = '';
     for await (const chunk of req) body += chunk;
-    seen = { url: req.url, auth: req.headers.authorization, body };
+    seen = { url: req.url, auth: req.headers.authorization, dropped: req.headers['x-drop-me'], proxyAuth: req.headers['proxy-authorization'], body };
     res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.write('event: message_start\ndata: {"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":120,"cache_creation_input_tokens":30,"cache_read_input_tokens":70}}}\n\n');
+    const first = Buffer.from('event: message_start\ndata: {"type":"message_start","message":{"model":"claude-tést","usage":{"input_tokens":120,"cache_creation_input_tokens":30,"cache_read_input_tokens":70}}}\n\n');
+    const split = first.indexOf(Buffer.from('é')) + 1;
+    res.write(first.subarray(0, split));
+    res.write(first.subarray(split));
     res.end('event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":11}}\n\n');
   });
   const port = await listen(upstream);
@@ -40,11 +43,11 @@ test('Claude gateway forwards Anthropic traffic unchanged and records streaming 
   const proxy = await startClaudeProxy(env);
   t.after(() => proxy.close());
   const body = '{"model":"claude-test","messages":[{"role":"user","content":"hello"}]}';
-  const response = await post(proxy.baseUrl, '/v1/messages?beta=true', body, { authorization: 'Bearer secret' });
+  const response = await post(proxy.baseUrl, '/v1/messages?beta=true', body, { authorization: 'Bearer secret', connection: 'x-drop-me', 'x-drop-me': 'secret', 'proxy-authorization': 'Basic secret' });
 
   assert.equal(response.status, 200);
   assert.match(response.text, /message_start/);
-  assert.deepEqual(seen, { url: '/anthropic/v1/messages?beta=true', auth: 'Bearer secret', body });
+  assert.deepEqual(seen, { url: '/anthropic/v1/messages?beta=true', auth: 'Bearer secret', dropped: undefined, proxyAuth: undefined, body });
 
   let rows;
   for (let i = 0; i < 20; i++) {
@@ -53,7 +56,7 @@ test('Claude gateway forwards Anthropic traffic unchanged and records streaming 
   }  assert.equal(rows.length, 1);
   assert.deepEqual(rows[0], {
     at: rows[0].at,
-    model: 'claude-test',
+    model: 'claude-tést',
     path: '/anthropic/v1/messages',
     statusCode: 200,
     durationMs: rows[0].durationMs,
@@ -84,8 +87,13 @@ test('Claude gateway wrapper preserves args and only replaces ANTHROPIC_BASE_URL
   assert.equal(spawned.options.env.KEEP_ME, 'yes');
   assert.equal(closed, true);
 });test('Claude gateway fails open for provider routes it cannot safely proxy', async () => {
-  assert.match(claudeProxyUnsupportedReason({ CLAUDE_CODE_USE_BEDROCK: '1' }), /Bedrock/);
+  assert.match(claudeProxyUnsupportedReason({ CLAUDE_CODE_USE_BEDROCK: 'true' }), /Bedrock/);
+  assert.equal(claudeProxyUnsupportedReason({ CLAUDE_CODE_USE_BEDROCK: 'false' }), undefined);
   assert.match(claudeProxyUnsupportedReason({ ANTHROPIC_VERTEX_BASE_URL: 'https://vertex.example' }), /Vertex/);
+  assert.match(claudeProxyUnsupportedReason({ CLAUDE_CODE_USE_FOUNDRY: '1' }), /Foundry/);
+  assert.match(claudeProxyUnsupportedReason({ CLAUDE_CODE_USE_ANTHROPIC_AWS: '1' }), /AWS/);
+  assert.match(claudeProxyUnsupportedReason({ CLAUDE_CODE_USE_MANTLE: '1' }), /Mantle/);
+  assert.match(claudeProxyUnsupportedReason({ CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1' }), /managed by the host/);
   assert.match(claudeProxyUnsupportedReason({ HTTPS_PROXY: 'http://proxy.example:8080' }), /corporate proxy/);
 
   const child = new EventEmitter();
@@ -103,4 +111,41 @@ test('Claude gateway wrapper preserves args and only replaces ANTHROPIC_BASE_URL
   assert.equal(code, 0);
   assert.equal(proxyStarted, false);
   assert.equal(spawned.options.env, env);
+});
+
+
+test('Claude gateway records usage from non-streaming JSON responses without changing the body', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-claude-json-proxy-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const responseBody = JSON.stringify({
+    id: 'msg_1',
+    model: 'claude-json',
+    content: [{ type: 'text', text: 'ok' }],
+    usage: { input_tokens: 9, cache_creation_input_tokens: 2, cache_read_input_tokens: 3, output_tokens: 4 },
+  });
+  const upstream = createServer(async (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(responseBody) });
+    res.end(responseBody);
+  });
+  const port = await listen(upstream);
+  t.after(() => new Promise((resolve) => upstream.close(resolve)));
+
+  const env = { JEVCOMP_DATA_DIR: join(root, 'data'), ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}` };
+  const proxy = await startClaudeProxy(env);
+  t.after(() => proxy.close());
+  const response = await post(proxy.baseUrl, '/v1/messages', '{}');
+  assert.equal(response.text, responseBody);
+
+  let row;
+  for (let i = 0; i < 20; i++) {
+    try {
+      row = JSON.parse((await readFile(join(root, 'data', 'claude-usage.jsonl'), 'utf8')).trim());
+      break;
+    } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
+  }
+  assert.equal(row.model, 'claude-json');
+  assert.equal(row.inputTokens, 9);
+  assert.equal(row.cacheCreationInputTokens, 2);
+  assert.equal(row.cacheReadInputTokens, 3);
+  assert.equal(row.outputTokens, 4);
 });
