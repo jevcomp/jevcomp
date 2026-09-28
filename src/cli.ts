@@ -7,6 +7,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compactForClaude } from './claude-compact.js';
+import { runClaude } from './claude-proxy.js';
 import { runCodex } from './codex-proxy.js';
 import { commandExists, runSync } from './command.js';
 import { agyCaInstalled, agyCertificateThumbprint, installAgyCa, runAgy, uninstallAgyCa } from './agy-proxy.js';
@@ -42,6 +43,7 @@ function help(): void {
   ${command} uninstall    Remove jevcomp from Codex, Claude Code or Antigravity
   ${' '.repeat(command.length)}              Only one of them: uninstall codex, uninstall claude, uninstall agy
   ${command} codex [args]  Run Codex through the local proxy; compaction is answered by Jev
+  ${command} claude [args] Run Claude Code through the local model gateway; compaction still uses the hook
   ${command} agy [args]   Run Antigravity through the local proxy
   ${command} audit        Configure and inspect local decision evidence
 
@@ -189,7 +191,7 @@ async function install(args: readonly string[]): Promise<void> {
   const agents = await chooseAgents(args);
   const provider = await chooseProvider(args.find((arg) => !['codex', 'claude', 'agy', 'all', 'both'].includes(arg)));
   await saveKey(provider);
-  if (agents.includes('claude')) await installClaude();
+  if (agents.includes('claude')) { await installClaude(); console.log('Connected to Claude Code. Use `jevcomp claude` for the local model gateway; plain `claude` still uses the Jev compaction hook.'); }
   if (agents.includes('codex')) {
     await removeLegacyHooks(process.env);
     await rm(runtimeDir(process.env), { recursive: true, force: true });
@@ -272,6 +274,7 @@ async function main(): Promise<void> {
     process.exitCode = await runCodex(args, process.env, { startDashboard: () => ensureDashboard(dashboardPort(process.env), process.env) });
     return;
   }
+  if (cmd === 'claude') { process.exitCode = await runClaude(args, process.env, { startDashboard: () => ensureDashboard(dashboardPort(process.env), process.env) }); return; }
   if (cmd === 'agy') { process.exitCode = await runAgy(args, process.env, { startDashboard: () => ensureDashboard(dashboardPort(process.env), process.env) }); return; }
 
   if (cmd === 'doctor') {

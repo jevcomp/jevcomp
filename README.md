@@ -5,7 +5,7 @@ Long coding sessions accumulate tool output that gets sent back to the model. Co
 jevcomp uses **Jev**, a small, fast AI model that only answers yes/no questions, to decide which old command outputs still matter:
 
 - **Codex:** started with `jevcomp codex`, the compaction request never reaches OpenAI: jevcomp answers it with what Jev kept.
-- **Claude Code:** there is no summary. Jev removes or shortens old command outputs and the rest of the conversation stays word for word, which also skips the summary request.
+- **Claude Code:** the function hook remains the compaction authority. `jevcomp claude` also routes Anthropic-format model traffic through a local gateway for usage/cache metering without changing request or response bytes.
 - **Antigravity (experimental):** `jevcomp agy` uses Jev to shorten old paired tool results before generation requests while preserving Gemini tool calls, signatures and unknown payload fields.
 
 Your own messages are never removed. If anything fails, the original agent request passes through or native compaction runs normally. Jev is called only for eligible old tool evidence, billed to your OpenRouter or TypeSafe key.
@@ -34,10 +34,11 @@ After `jevcomp install`, open each agent like this:
 | Agent | Open it with | What changes |
 |---|---|---|
 | Codex | `jevcomp codex` | Saves tokens: jevcomp answers the compaction itself. Plain `codex` saves nothing. |
-| Claude Code | `claude` (as usual) | Saves tokens on every compaction. The first time, restart Claude Code once. |
+| Claude Code | `jevcomp claude` | Uses the local model gateway plus the function hook. Plain `claude` still gets Jev compaction, but not gateway metering. |
 | Antigravity (experimental) | `jevcomp agy` | Jev selectively shortens old paired tool results in generation requests. Exact decisions are reused while semantic user/model context is unchanged and re-evaluated when the task progress changes. |
 
 - **Codex:** always start it with `jevcomp codex`. To force a compaction and see it work, type `/compact`.
+- **Claude Code:** prefer `jevcomp claude`. The gateway forwards the original `ANTHROPIC_BASE_URL` (or `https://api.anthropic.com`) and records streaming token/cache counters in `~/.jevcomp/claude-usage.jsonl`. Bedrock, Vertex and existing HTTP(S) corporate-proxy routes fail open to plain Claude Code while the compaction hook remains active.
 - **Antigravity:** `jevcomp install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the warning. It needs OpenSSL; jevcomp also discovers the copy bundled with Git for Windows, or you can set `JEVCOMP_OPENSSL` explicitly. Without the certificate, `jevcomp agy` opens plain Antigravity. `JEVCOMP_CAPTURE=1` saves the original requests it sees. Jev only edits unambiguous string tool results; unknown or ambiguous shapes pass through unchanged.
 - **Dashboard:** http://127.0.0.1:43127/ opens with Codex, Claude Code and Antigravity sessions; `jevcomp dashboard` opens it by hand.
 

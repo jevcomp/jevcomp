@@ -21,7 +21,7 @@ declare module 'node:fs/promises' {
 declare module 'node:fs' { export const cpSync: any; export const existsSync: any; export const readFileSync: any; export const readdirSync: any; export const writeFileSync: any; }
 declare module 'node:path' { export const join: any; export const dirname: any; export const resolve: any; export const basename: any; export const isAbsolute: any; export const relative: any; export const sep: string; }
 declare module 'node:os' { export const homedir: any; export const tmpdir: any; }
-declare module 'node:http' { export const createServer: any; }
+declare module 'node:http' { export const createServer: any; export const request: any; }
 declare module 'node:net' { export const connect: any; export const createServer: any; }
 declare module 'node:tls' { export const createServer: any; }
 declare module 'node:https' { export const request: any; }
