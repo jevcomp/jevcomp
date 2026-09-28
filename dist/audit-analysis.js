@@ -3,7 +3,7 @@ import { auditManifests } from './audit.js';
 import { auditRoot, digest, readJson, unpackEvidence } from './audit-store.js';
 import { indexTranscript, sourceRecord, blockText } from './audit-sources.js';
 import { join } from 'node:path';
-import { estimateTokens, shortenToolResult, shortenedResultLength } from './compact.js';
+import { estimateTokens, shortenToolResult } from './compact.js';
 import { codexCompactionReductionRatio, renderCodexCompactionSummary } from './codex-compaction.js';
 export function expectedAction(decision, manifest, dropLimit, truncateLimit) {
     if (decision.pinned)
@@ -20,14 +20,21 @@ export function expectedAction(decision, manifest, dropLimit, truncateLimit) {
         return 'keep';
     if (decision.dropLoss < drop)
         return 'drop_call';
-    return shortenedLength(decision.resultChars, head, tail) < decision.resultChars ? 'truncate_result' : 'keep';
+    const exactSavings = Number.isSafeInteger(decision.savedChars) && decision.savedChars >= 0 ? decision.savedChars : undefined;
+    const canShorten = exactSavings !== undefined ? exactSavings > 0 : historicalShortenedLengthEstimate(decision.resultChars, head, tail) < decision.resultChars;
+    return canShorten ? 'truncate_result' : 'keep';
 }
 function manifestTailChars(manifest) {
     const value = Number(manifest.settings.truncateTailChars);
     return Number.isInteger(value) && value >= 0 ? value : 0;
 }
-export function shortenedLength(length, head, tail = 0) {
-    return shortenedResultLength(length, head, tail);
+function historicalShortenedLengthEstimate(length, head, tail = 0) {
+    if (length <= head + tail)
+        return length;
+    const omitted = Math.max(0, length - head - tail);
+    const retained = Math.min(length, head) + Math.min(Math.max(0, length - head), tail);
+    const separators = Number(head > 0) + Number(tail > 0);
+    return retained + separators + `[jevcomp omitted ${omitted} chars; rerun tool if needed]`.length;
 }
 async function outputMessages(env, manifest, key) {
     const ref = manifest.references[key];
@@ -206,7 +213,9 @@ export function auditReport(analysis, seed = 'jev-audit-v1', limit = 30) {
         add(item, 'seeded_random_fill');
     const eligible = nonPinned.filter(item => {
         const manifest = manifests.find(manifest => manifest.id === item.evaluationId);
-        return shortenedLength(item.resultChars, Number(manifest.settings.truncateHeadChars), manifestTailChars(manifest)) < item.resultChars;
+        if (Number.isSafeInteger(item.savedChars) && item.savedChars >= 0)
+            return item.savedChars > 0;
+        return historicalShortenedLengthEstimate(item.resultChars, Number(manifest.settings.truncateHeadChars), manifestTailChars(manifest)) < item.resultChars;
     });
     return {
         schema: 1, generatedAt: new Date().toISOString(), units: { text: 'UTF-16 code units (same as compactor String.length)', continuation: 'unique assistant messages; not billed requests' },
@@ -290,9 +299,10 @@ export async function simulateAudit(env, analysis, dropLimit, truncateLimit, min
         const proposed = input.map(message => ({ ...message,
             toolCalls: message.toolCalls.filter(call => decisions.get(call.id) !== 'drop_call'),
             toolResults: message.toolResults?.filter(result => decisions.get(result.callId) !== 'drop_call').map(result => {
-                if (decisions.get(result.callId) !== 'truncate_result' || shortenedLength(result.output.length, head, tail) >= result.output.length)
+                if (decisions.get(result.callId) !== 'truncate_result')
                     return result;
-                return { ...result, output: shortenToolResult(result.output, head, tail) };
+                const shortened = shortenToolResult(result.output, head, tail);
+                return shortened.length < result.output.length ? { ...result, output: shortened } : result;
             }),
         })).filter(message => message.text.trim() || message.toolCalls.length || message.toolResults?.length);
         const chars = (messages) => messages.reduce((sum, message) => sum + message.text.length + message.toolCalls.reduce((n, call) => n + (typeof call.input === 'string' ? call.input : JSON.stringify(call.input) ?? String(call.input)).length, 0) + (message.toolResults ?? []).reduce((n, result) => n + result.output.length, 0), 0);

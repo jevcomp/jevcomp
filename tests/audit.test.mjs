@@ -25,6 +25,13 @@ test('invalid scores remain unauditable instead of appearing policy compliant', 
   assert.equal(expectedAction(decision, manifest), undefined);
 });
 
+test('audit uses exact savedChars when Unicode-safe shortening changes the retained length', () => {
+  const manifest = { settings: { lossThreshold: 0.5, truncateHeadChars: 0, truncateTailChars: 1 } };
+  const base = { pinned: false, dropLoss: 0.9, truncateLoss: 0.1, resultChars: 50 };
+  assert.equal(expectedAction({ ...base, savedChars: 2 }, manifest), 'truncate_result');
+  assert.equal(expectedAction({ ...base, savedChars: 0 }, manifest), 'keep');
+});
+
 test('historical prefix-only manifests keep their original shortening policy', () => {
   const decision = { pinned: false, dropLoss: 0.9, truncateLoss: 0.1, resultChars: 420 };
   const historical = { settings: { lossThreshold: 0.5, truncateHeadChars: 300 } };

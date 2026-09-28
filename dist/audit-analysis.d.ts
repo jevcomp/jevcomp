@@ -40,7 +40,6 @@ export interface AuditAnalysis {
     corrupt: string[];
 }
 export declare function expectedAction(decision: CallDecision, manifest: AuditManifest, dropLimit?: number, truncateLimit?: number): CallDecision['action'] | undefined;
-export declare function shortenedLength(length: number, head: number, tail?: number): number;
 export declare function analyzeAudit(env: Env): Promise<AuditAnalysis>;
 export declare function auditReport(analysis: AuditAnalysis, seed?: string, limit?: number): {
     schema: number;

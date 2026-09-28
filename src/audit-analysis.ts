@@ -5,7 +5,7 @@ import { indexTranscript, sourceRecord, blockText, type SourceIndex, type Source
 import { join } from 'node:path';
 import type { Env } from './provider.js';
 import type { CallDecision, Message } from './types.js';
-import { estimateTokens, shortenToolResult, shortenedResultLength } from './compact.js';
+import { estimateTokens, shortenToolResult } from './compact.js';
 import { codexCompactionReductionRatio, renderCodexCompactionSummary } from './codex-compaction.js';
 
 export interface AuditCase {
@@ -31,7 +31,9 @@ export function expectedAction(decision: CallDecision, manifest: AuditManifest, 
   const drop = dropLimit ?? limit, truncate = truncateLimit ?? limit;
   if (decision.truncateLoss >= truncate) return 'keep';
   if (decision.dropLoss < drop) return 'drop_call';
-  return shortenedLength(decision.resultChars, head, tail) < decision.resultChars ? 'truncate_result' : 'keep';
+  const exactSavings = Number.isSafeInteger(decision.savedChars) && decision.savedChars >= 0 ? decision.savedChars : undefined;
+  const canShorten = exactSavings !== undefined ? exactSavings > 0 : historicalShortenedLengthEstimate(decision.resultChars, head, tail) < decision.resultChars;
+  return canShorten ? 'truncate_result' : 'keep';
 }
 
 function manifestTailChars(manifest: AuditManifest): number {
@@ -39,8 +41,12 @@ function manifestTailChars(manifest: AuditManifest): number {
   return Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
-export function shortenedLength(length: number, head: number, tail = 0): number {
-  return shortenedResultLength(length, head, tail);
+function historicalShortenedLengthEstimate(length: number, head: number, tail = 0): number {
+  if (length <= head + tail) return length;
+  const omitted = Math.max(0, length - head - tail);
+  const retained = Math.min(length, head) + Math.min(Math.max(0, length - head), tail);
+  const separators = Number(head > 0) + Number(tail > 0);
+  return retained + separators + `[jevcomp omitted ${omitted} chars; rerun tool if needed]`.length;
 }
 
 async function outputMessages(env: Env, manifest: AuditManifest, key: 'input' | 'output'): Promise<Message[] | undefined> {
@@ -174,7 +180,8 @@ export function auditReport(analysis: AuditAnalysis, seed = 'jev-audit-v1', limi
   for (const item of ordered) add(item, 'seeded_random_fill');
   const eligible = nonPinned.filter(item => {
     const manifest = manifests.find(manifest => manifest.id === item.evaluationId)!;
-    return shortenedLength(item.resultChars, Number(manifest.settings.truncateHeadChars), manifestTailChars(manifest)) < item.resultChars;
+    if (Number.isSafeInteger(item.savedChars) && item.savedChars >= 0) return item.savedChars > 0;
+    return historicalShortenedLengthEstimate(item.resultChars, Number(manifest.settings.truncateHeadChars), manifestTailChars(manifest)) < item.resultChars;
   });
   return {
     schema: 1, generatedAt: new Date().toISOString(), units: { text: 'UTF-16 code units (same as compactor String.length)', continuation: 'unique assistant messages; not billed requests' },
@@ -240,8 +247,9 @@ export async function simulateAudit(env: Env, analysis: AuditAnalysis, dropLimit
     const proposed: Message[] = input.map(message => ({ ...message,
       toolCalls: message.toolCalls.filter(call => decisions.get(call.id) !== 'drop_call'),
       toolResults: message.toolResults?.filter(result => decisions.get(result.callId) !== 'drop_call').map(result => {
-        if (decisions.get(result.callId) !== 'truncate_result' || shortenedLength(result.output.length, head, tail) >= result.output.length) return result;
-        return { ...result, output: shortenToolResult(result.output, head, tail) };
+        if (decisions.get(result.callId) !== 'truncate_result') return result;
+        const shortened = shortenToolResult(result.output, head, tail);
+        return shortened.length < result.output.length ? { ...result, output: shortened } : result;
       }),
     })).filter(message => message.text.trim() || message.toolCalls.length || message.toolResults?.length);
     const chars = (messages: Message[]) => messages.reduce((sum, message) => sum + message.text.length + message.toolCalls.reduce((n, call) => n + (typeof call.input === 'string' ? call.input : JSON.stringify(call.input) ?? String(call.input)).length, 0) + (message.toolResults ?? []).reduce((n, result) => n + result.output.length, 0), 0);

@@ -46,6 +46,20 @@ test('untouched messages retain object identity and protected roles remain in Je
   assert.match(JSON.stringify(seenState), /Never edit generated files/);
 });
 
+test('pre-existing empty messages are preserved when no decision touches them', async () => {
+  const empty = { role: 'assistant', text: '', toolCalls: [] };
+  const messages = [
+    { role: 'user', text: 'task', toolCalls: [] },
+    empty,
+    { role: 'assistant', text: 'done', toolCalls: [] },
+  ];
+  const result = await compact(messages, { async ask() { throw new Error('should not be called'); } });
+  assert.equal(result.messages.length, 3);
+  assert.equal(result.messages[1], empty);
+  assert.equal(result.stats.messagesBefore, 3);
+  assert.equal(result.stats.messagesAfter, 3);
+});
+
 test('provider state and decision previews redact credentials without changing retained evidence', async () => {
   const bearer = 'sample-bearer-secret-123456';
   const messages = [
@@ -146,6 +160,39 @@ test('fitter supports hundreds of old call-bearing messages after semantic text 
   assert.match(result.stats.stateStage, /collapsed call markers removed|old messages removed|old calls merged/);
 });
 
+
+test('non-finite compact options fall back to safe defaults', async () => {
+  const output = 'HEAD\n' + 'middle '.repeat(300) + '\nTAIL';
+  const messages = [
+    { role: 'user', text: 'task', toolCalls: [] },
+    { role: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'read', input: { path: 'x' } }] },
+    { role: 'tool', text: '', toolCalls: [], toolResults: [{ callId: 'c1', output }] },
+    { role: 'assistant', text: 'continue', toolCalls: [] },
+  ];
+  const asker = { async ask(_state, questions) {
+    return { answers: Object.fromEntries(Object.keys(questions).map((key) => [
+      key,
+      { noul: key.startsWith('drop_') ? 0.9 : 0.1 },
+    ])) };
+  } };
+  const result = await compact(messages, asker, {
+    preserveRecentMessages: 0,
+    lossThreshold: Number.NaN,
+    maxStateTokens: Number.POSITIVE_INFINITY,
+    maxRequestTokens: Number.NaN,
+    truncateHeadChars: Number.NaN,
+    truncateTailChars: Number.POSITIVE_INFINITY,
+    maxConcurrentRequests: Number.NaN,
+  });
+  assert.equal(result.decisions[0].action, 'truncate_result');
+  const shortened = result.messages.flatMap((m) => m.toolResults ?? [])[0].output;
+  assert.ok(shortened.startsWith(output.slice(0, 300)));
+  assert.ok(shortened.endsWith(output.slice(-100)));
+
+  const pinned = await compact(messages, asker, { preserveRecentMessages: Number.NaN });
+  assert.equal(pinned.decisions[0].pinned, true);
+  assert.equal(pinned.decisions[0].action, 'keep');
+});
 
 test('lossThreshold is the preferred name and keepThreshold remains compatible', async () => {
   const messages = [
