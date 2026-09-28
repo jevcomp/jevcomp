@@ -15,6 +15,7 @@ export interface AgyCompactResult {
     changed: boolean;
     providerAsked: boolean;
     providerFailed: boolean;
+    planUpdated: boolean;
     sessionId: string;
     stats: CompactStats;
     decisions: CallDecision[];

@@ -43,6 +43,7 @@ export interface AgyCompactResult {
   changed: boolean;
   providerAsked: boolean;
   providerFailed: boolean;
+  planUpdated: boolean;
   sessionId: string;
   stats: CompactStats;
   decisions: CallDecision[];
@@ -358,6 +359,7 @@ export async function compactAgyPayload(
     changed: afterChars < beforeChars,
     providerAsked: memo.providerAsked,
     providerFailed: memo.providerFailed,
+    planUpdated: memo.providerAsked && !memo.providerFailed && acceptedNew,
     sessionId,
     stats,
     decisions: effectiveDecisions,

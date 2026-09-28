@@ -310,6 +310,7 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
         changed: afterChars < beforeChars,
         providerAsked: memo.providerAsked,
         providerFailed: memo.providerFailed,
+        planUpdated: memo.providerAsked && !memo.providerFailed && acceptedNew,
         sessionId,
         stats,
         decisions: effectiveDecisions,

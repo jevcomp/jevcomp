@@ -5,7 +5,8 @@ import { createServer as createTlsServer } from 'node:tls';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { captureDirectory } from './store.js';
+import { captureDirectory, tryAppendHistory } from './store.js';
+import { compactAgyRequest, createAgyCompactionState } from './agy-compact.js';
 import { launch } from './command.js';
 import { randomUUID } from 'node:crypto';
 
@@ -96,6 +97,7 @@ export async function uninstallAgyCa(): Promise<void> {
 
 export async function startAgyProxy(env = process.env, options: { tunnelHost?: string; tunnelPort?: number; upstreamHost?: string; upstreamPort?: number; upstreamCa?: Uint8Array } = {}): Promise<{ url: string; close: () => Promise<void> }> {
   const { directory } = await ensureAgyCertificate(env);
+  const compactionState = createAgyCompactionState();
   const key = await readFile(join(directory, 'server.key'));
   const cert = await readFile(join(directory, 'server.crt'));
   const http = createHttpServer((req: any, res: any) => {
@@ -105,13 +107,60 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
       const chunks: Uint8Array[] = [];
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks);
-      if (req.method === 'POST' && req.url?.split('?')[0] === '/v1internal:streamGenerateContent') {
+      let outbound = body;
+      const isGeneration = req.method === 'POST' && req.url?.split('?')[0] === '/v1internal:streamGenerateContent';
+      if (isGeneration) {
         const directory = captureDirectory(env, 'agy-capture');
         if (directory) try { await mkdir(directory, { recursive: true, mode: 0o700 }); await writeFile(join(directory, `${Date.now()}-${randomUUID()}.bin`), body, { mode: 0o600, flag: 'wx' }); } catch {}
+        try {
+          const compacted = await compactAgyRequest(body, env, compactionState);
+          if (compacted) {
+            if (compacted.changed) outbound = Buffer.from(JSON.stringify(compacted.payload));
+            if (compacted.providerAsked) {
+              const runId = randomUUID();
+              const base = {
+                at: new Date().toISOString(),
+                runId,
+                sessionId: compacted.sessionId,
+                model: typeof compacted.payload.model === 'string' ? compacted.payload.model : undefined,
+                host: 'agy' as const,
+                phase: 'precompact' as const,
+              };
+              const status = compacted.providerFailed ? 'failed' as const : compacted.changed ? 'prepared' as const : 'skipped' as const;
+              await tryAppendHistory({
+                ...base,
+                status,
+                stats: compacted.stats,
+                decisions: compacted.decisions,
+                retainedChars: compacted.changed ? compacted.stats.charsAfter : undefined,
+                detail: compacted.providerFailed
+                  ? 'Jev failed; Antigravity forwarded with only previously cached decisions'
+                  : compacted.planUpdated
+                    ? `Antigravity request reduced by ${Math.round(compacted.reductionRatio * 100)}%`
+                    : 'Antigravity reduction below minimum; new decisions were not applied',
+              }, env);
+              if (compacted.planUpdated && compacted.changed) {
+                await tryAppendHistory({
+                  ...base,
+                  at: new Date().toISOString(),
+                  phase: 'postcompact',
+                  status: 'restored',
+                  stats: compacted.stats,
+                  retainedChars: compacted.stats.charsAfter,
+                  injectedChars: 0,
+                  injectedPayloadChars: 0,
+                  detail: 'Antigravity request forwarded with stable Jev-selected tool evidence',
+                }, env);
+              }
+            }
+          }
+        } catch {}
       }
+      const forwardHeaders = outbound === body ? req.headers : { ...req.headers, 'content-length': String(outbound.length) };
+      if (outbound !== body) delete forwardHeaders['transfer-encoding'];
       const upstream = await import('node:https').then(({ request }) => new Promise<any>((resolve, reject) => {
-        const forward = request({ hostname: options.upstreamHost ?? hostname, servername: hostname, port: options.upstreamPort ?? 443, ca: options.upstreamCa, method: req.method, path: req.url, headers: req.headers }, resolve);
-        forward.once('error', reject); forward.end(body);
+        const forward = request({ hostname: options.upstreamHost ?? hostname, servername: hostname, port: options.upstreamPort ?? 443, ca: options.upstreamCa, method: req.method, path: req.url, headers: forwardHeaders }, resolve);
+        forward.once('error', reject); forward.end(outbound);
       }));
       res.writeHead(upstream.statusCode, upstream.headers);
       upstream.pipe(res);
