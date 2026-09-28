@@ -11,6 +11,9 @@ function record(value) {
 function strings(value) {
     return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
+function finiteOption(value, fallback) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
 export function createAgyCompactionState() {
     return { sessions: new Map() };
 }
@@ -84,7 +87,7 @@ function pairRefs(contents, preserveRecentMessages) {
     for (const response of responses.sort((a, b) => location(a) - location(b))) {
         let matches = [];
         if (response.id && callIdCounts.get(response.id) === 1 && responseIdCounts.get(response.id) === 1) {
-            matches = calls.filter((call) => call.id === response.id && location(call) < location(response) && !usedCalls.has(call));
+            matches = calls.filter((call) => call.id === response.id && call.name === response.name && location(call) < location(response) && !usedCalls.has(call));
         }
         else if (!response.id) {
             matches = calls.filter((call) => call.name === response.name && location(call) < location(response) && !usedCalls.has(call));
@@ -146,6 +149,7 @@ class PlanAsker {
     allowNetwork;
     providerAsked = false;
     providerFailed = false;
+    providerRequests = 0;
     constructor(delegate, pairsByCandidate, actions, allowNetwork) {
         this.delegate = delegate;
         this.pairsByCandidate = pairsByCandidate;
@@ -172,6 +176,7 @@ class PlanAsker {
         if (!Object.keys(external).length)
             return { answers };
         this.providerAsked = true;
+        this.providerRequests++;
         try {
             const response = await this.delegate.ask(state, external);
             return { ...response, answers: { ...answers, ...response.answers } };
@@ -245,16 +250,16 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
     const sessionId = strings(request?.sessionId);
     if (!request || !contents || !sessionId || contents.length < 2)
         return undefined;
-    const preserveRecentMessages = Math.max(0, Math.floor(options.preserveRecentMessages ?? 6));
+    const preserveRecentMessages = Math.max(0, Math.floor(finiteOption(options.preserveRecentMessages, 6)));
     const pairs = pairRefs(contents, preserveRecentMessages);
     if (!pairs.length)
         return undefined;
     const plan = sessionPlan(state, sessionId, semanticContextKey(contents));
     const unplanned = pairs.filter((pair) => !pair.pinned && !plan.actions.has(pair.fingerprint));
-    const minEligible = Math.max(0, Math.floor(options.minEligibleChars ?? DEFAULT_MIN_ELIGIBLE_CHARS));
+    const minEligible = Math.max(0, Math.floor(finiteOption(options.minEligibleChars, DEFAULT_MIN_ELIGIBLE_CHARS)));
     const eligibleChars = unplanned.reduce((sum, pair) => sum + pair.response.result.length, 0);
     const beforeChars = rawContentsChars(input);
-    const minimum = Math.min(1, Math.max(0, options.minReductionRatio ?? 0.15));
+    const minimum = Math.min(1, Math.max(0, finiteOption(options.minReductionRatio, 0.15)));
     const potentialRatio = beforeChars ? eligibleChars / beforeChars : 0;
     const allowNetwork = eligibleChars >= minEligible && (plan.actions.size > 0 || potentialRatio >= minimum);
     const normalized = toMessages(contents, pairs);
@@ -270,8 +275,8 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
                 proposedActions.set(pair.fingerprint, decision.action);
         }
     }
-    const head = Math.max(0, Math.floor(options.truncateHeadChars ?? 300));
-    const tail = Math.max(0, Math.floor(options.truncateTailChars ?? 100));
+    const head = Math.max(0, Math.floor(finiteOption(options.truncateHeadChars, 300)));
+    const tail = Math.max(0, Math.floor(finiteOption(options.truncateTailChars, 100)));
     const baseline = applyActions(input, pairs, plan.actions, head, tail);
     const proposed = applyActions(input, pairs, proposedActions, head, tail);
     const proposedChars = rawContentsChars(proposed);
@@ -279,7 +284,7 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
     const acceptedNew = !memo.providerAsked || memo.providerFailed || proposedReduction >= minimum;
     if (memo.providerAsked && !memo.providerFailed && acceptedNew)
         plan.actions = proposedActions;
-    const output = memo.providerAsked && !memo.providerFailed && !acceptedNew ? baseline : proposed;
+    const output = memo.providerFailed ? input : memo.providerAsked && !acceptedNew ? baseline : proposed;
     const afterChars = rawContentsChars(output);
     const reductionRatio = beforeChars ? (beforeChars - afterChars) / beforeChars : 0;
     const pairById = new Map(pairs.map((pair) => [pair.callId, pair]));
@@ -301,6 +306,7 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
         ...result.stats,
         charsBefore: beforeChars,
         charsAfter: afterChars,
+        requests: memo.providerRequests,
         callsDropped: 0,
         resultsTruncated: effectiveDecisions.filter((decision) => decision.action === 'truncate_result').length,
         kept: effectiveDecisions.filter((decision) => !decision.pinned && decision.action === 'keep').length,

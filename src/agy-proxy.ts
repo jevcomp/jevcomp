@@ -11,10 +11,22 @@ import { launch } from './command.js';
 import { randomUUID } from 'node:crypto';
 
 const CA_NAME = 'jevcomp Antigravity local CA';
+const BODY_INTEGRITY_HEADERS = ['content-md5', 'content-digest', 'digest', 'x-goog-content-sha256'] as const;
 
 export const AGY_HOSTS = ['cloudcode-pa.googleapis.com', 'daily-cloudcode-pa.googleapis.com'] as const;
 const allowed = new Set<string>(AGY_HOSTS);
 export const isAgyInterceptHost = (hostname: string): boolean => allowed.has(hostname.toLowerCase());
+
+function connectTarget(value: string): { hostname: string; port: number } | undefined {
+  try {
+    const parsed = new URL(`http://${value}`);
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const port = parsed.port ? Number(parsed.port) : 443;
+    return hostname && Number.isInteger(port) && port > 0 && port < 65536 ? { hostname, port } : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const caDir = (env: Record<string, string | undefined>) => join(env.JEVCOMP_AGY_HOME ?? join(homedir(), '.jevcomp', 'agy-ca'));
 
 const OPENSSL_MISSING = 'openssl was not found; install it first (for example: winget install ShiningLight.OpenSSL.Light)';
@@ -109,14 +121,15 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
       const body = Buffer.concat(chunks);
       let outbound = body;
       const isGeneration = req.method === 'POST' && req.url?.split('?')[0] === '/v1internal:streamGenerateContent';
+      const bodyIntegrityProtected = BODY_INTEGRITY_HEADERS.some((name) => req.headers[name] !== undefined);
       if (isGeneration) {
         const directory = captureDirectory(env, 'agy-capture');
         if (directory) try { await mkdir(directory, { recursive: true, mode: 0o700 }); await writeFile(join(directory, `${Date.now()}-${randomUUID()}.bin`), body, { mode: 0o600, flag: 'wx' }); } catch {}
         try {
-          const compacted = await compactAgyRequest(body, env, compactionState);
+          const compacted = bodyIntegrityProtected ? undefined : await compactAgyRequest(body, env, compactionState);
           if (compacted) {
             if (compacted.changed) outbound = Buffer.from(JSON.stringify(compacted.payload));
-            if (compacted.providerAsked) {
+            if (compacted.providerAsked || compacted.changed) {
               const runId = randomUUID();
               const base = {
                 at: new Date().toISOString(),
@@ -134,12 +147,14 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
                 decisions: compacted.decisions,
                 retainedChars: compacted.changed ? compacted.stats.charsAfter : undefined,
                 detail: compacted.providerFailed
-                  ? 'Jev failed; Antigravity forwarded with only previously cached decisions'
+                  ? 'Jev failed; Antigravity request forwarded unchanged'
                   : compacted.planUpdated
                     ? `Antigravity request reduced by ${Math.round(compacted.reductionRatio * 100)}%`
-                    : 'Antigravity reduction below minimum; new decisions were not applied',
+                    : compacted.changed
+                      ? `Antigravity request reduced by ${Math.round(compacted.reductionRatio * 100)}% using cached decisions`
+                      : 'Antigravity reduction below minimum; new decisions were not applied',
               }, env);
-              if (compacted.planUpdated && compacted.changed) {
+              if (compacted.changed) {
                 await tryAppendHistory({
                   ...base,
                   at: new Date().toISOString(),
@@ -149,7 +164,9 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
                   retainedChars: compacted.stats.charsAfter,
                   injectedChars: 0,
                   injectedPayloadChars: 0,
-                  detail: 'Antigravity request forwarded with stable Jev-selected tool evidence',
+                  detail: compacted.planUpdated
+                    ? 'Antigravity request forwarded with newly selected Jev tool evidence'
+                    : 'Antigravity request forwarded with previously cached Jev tool evidence',
                 }, env);
               }
             }
@@ -179,16 +196,16 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
       client.off('data', onData);
       const line = header.subarray(0, end).toString('latin1').split('\r\n')[0] ?? '';
       const [, target = ''] = line.split(' ');
-      const hostname = target.replace(/:\d+$/, '').toLowerCase();
-      if (!line.startsWith('CONNECT ') || !hostname) { client.destroy(); return; }
-      if (allowed.has(hostname)) {
+      const destination = line.startsWith('CONNECT ') ? connectTarget(target) : undefined;
+      if (!destination) { client.destroy(); return; }
+      if (allowed.has(destination.hostname) && destination.port === 443) {
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         const rest = header.subarray(end + 4);
         if (rest.length) client.unshift(rest);
         tls.emit('connection', client);
         return;
       }
-      const upstream = tcpConnect(options.tunnelPort ?? 443, options.tunnelHost ?? hostname, () => {
+      const upstream = tcpConnect(options.tunnelPort ?? destination.port, options.tunnelHost ?? destination.hostname, () => {
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         const rest = header.subarray(end + 4);
         if (rest.length) upstream.write(rest);

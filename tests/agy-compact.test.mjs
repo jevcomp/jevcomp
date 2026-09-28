@@ -97,6 +97,19 @@ test('ambiguous id-less parallel calls fail open instead of guessing a pair', as
   assert.equal(asker.counter.calls, 0);
 });
 
+test('Antigravity requires function call and response names to agree even when ids match', async () => {
+  const input = payload();
+  input.request.contents[2].parts[0].functionResponse.name = 'different-tool';
+  const asker = askerFor(0.1, 0.1);
+  const result = await compactAgyPayload(input, asker, createAgyCompactionState(), {
+    preserveRecentMessages: 0,
+    minEligibleChars: 0,
+    minReductionRatio: 0,
+  });
+  assert.equal(result, undefined);
+  assert.equal(asker.counter.calls, 0);
+});
+
 test('complex or non-string function responses are never candidates', async () => {
   const input = payload();
   input.request.contents[2].parts[0].functionResponse.response.result = { binary: 'opaque' };
@@ -125,6 +138,8 @@ test('Antigravity reuses exact decisions only while semantic user/model context 
   const second = await compactAgyPayload(payload(), asker, state, options);
   assert.equal(first.changed, true);
   assert.equal(second.changed, true);
+  assert.equal(first.stats.requests, 1);
+  assert.equal(second.stats.requests, 0);
   assert.equal(asker.counter.calls, 1);
   assert.equal(
     first.payload.request.contents[2].parts[0].functionResponse.response.result,
@@ -140,6 +155,67 @@ test('Antigravity reuses exact decisions only while semantic user/model context 
   const changedGoal = await compactAgyPayload(payload(undefined, 'Now diagnose a different production failure'), asker, state, options);
   assert.equal(changedGoal.changed, true);
   assert.equal(asker.counter.calls, 3);
+});
+
+test('Antigravity fails open to the original request when a new Jev judgement fails', async () => {
+  const state = createAgyCompactionState();
+  const options = {
+    preserveRecentMessages: 0,
+    minEligibleChars: 0,
+    minReductionRatio: 0,
+    truncateHeadChars: 100,
+    truncateTailChars: 50,
+  };
+  const firstInput = payload();
+  const first = await compactAgyPayload(firstInput, askerFor(0.9, 0.1), state, options);
+  assert.equal(first.changed, true);
+
+  const secondInput = payload();
+  secondInput.request.contents.push(
+    { role: 'model', parts: [{ functionCall: { id: 'call_2', name: 'shell', args: { command: 'npm run build' } } }] },
+    { role: 'user', parts: [{ functionResponse: { id: 'call_2', name: 'shell', response: { result: 'new output '.repeat(700) } } }] },
+  );
+  const failing = { async ask() { throw new Error('provider offline'); } };
+  const second = await compactAgyPayload(secondInput, failing, state, options);
+  assert.equal(second.providerAsked, true);
+  assert.equal(second.providerFailed, true);
+  assert.equal(second.changed, false);
+  assert.deepEqual(second.payload, secondInput);
+  assert.ok(second.decisions.every((decision) => decision.action === 'keep'));
+});
+
+test('Antigravity non-finite options fall back to conservative defaults', async () => {
+  const state = createAgyCompactionState();
+  const asker = askerFor(0.9, 0.1);
+  const large = payload('HEAD\n' + 'noise '.repeat(1000) + '\nTAIL ERROR');
+  const result = await compactAgyPayload(large, asker, state, {
+    preserveRecentMessages: 0,
+    minEligibleChars: 0,
+    minReductionRatio: Number.NaN,
+    truncateHeadChars: Number.NaN,
+    truncateTailChars: Number.POSITIVE_INFINITY,
+  });
+  assert.equal(result.changed, true);
+  const shortened = result.payload.request.contents[2].parts[0].functionResponse.response.result;
+  assert.ok(shortened.startsWith(large.request.contents[2].parts[0].functionResponse.response.result.slice(0, 300)));
+  assert.ok(shortened.endsWith(large.request.contents[2].parts[0].functionResponse.response.result.slice(-100)));
+
+  const smallAsker = askerFor(0.9, 0.1);
+  const small = await compactAgyPayload(payload('x'.repeat(1000)), smallAsker, createAgyCompactionState(), {
+    preserveRecentMessages: 0,
+    minEligibleChars: Number.NaN,
+    minReductionRatio: 0,
+  });
+  assert.equal(small.providerAsked, false);
+  assert.equal(smallAsker.counter.calls, 0);
+
+  const pinned = await compactAgyPayload(large, askerFor(0.9, 0.1), createAgyCompactionState(), {
+    preserveRecentMessages: Number.NaN,
+    minEligibleChars: 0,
+    minReductionRatio: 0,
+  });
+  assert.equal(pinned.changed, false);
+  assert.equal(pinned.decisions[0].pinned, true);
 });
 
 test('Antigravity avoids a Jev request when new eligible output cannot meet the configured reduction', async () => {

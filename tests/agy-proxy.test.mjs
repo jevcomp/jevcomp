@@ -15,20 +15,54 @@ async function listen(server) {
   return server.address().port;
 }
 
+async function postGeneration(proxyUrl, ca, raw, extraHeaders = '') {
+  const socket = connectTcp(Number(new URL(proxyUrl).port), '127.0.0.1');
+  await new Promise(resolve => socket.once('connect', resolve));
+  socket.write('CONNECT cloudcode-pa.googleapis.com:443 HTTP/1.1\r\nHost: cloudcode-pa.googleapis.com:443\r\n\r\n');
+  const responseText = await new Promise((resolve, reject) => {
+    let response = Buffer.alloc(0);
+    const onData = chunk => {
+      response = Buffer.concat([response, chunk]);
+      if (!response.includes(Buffer.from('\r\n\r\n'))) return;
+      socket.off('data', onData);
+      if (!response.toString().startsWith('HTTP/1.1 200')) return reject(new Error('CONNECT denied'));
+      const tls = connectTls({ socket, servername: 'cloudcode-pa.googleapis.com', ca });
+      tls.once('secureConnect', () => {
+        tls.write(
+          'POST /v1internal:streamGenerateContent?alt=sse HTTP/1.1\r\n' +
+          'Host: cloudcode-pa.googleapis.com\r\n' +
+          'Content-Type: application/json\r\n' +
+          extraHeaders +
+          `Content-Length: ${Buffer.byteLength(raw)}\r\n` +
+          'Connection: close\r\n\r\n' +
+          raw,
+        );
+        let text = '';
+        tls.on('data', chunk => { text += chunk.toString(); });
+        tls.once('end', () => resolve(text));
+      });
+      tls.once('error', reject);
+    };
+    socket.on('data', onData);
+  });
+  socket.destroy();
+  return responseText;
+}
+
 test('Antigravity proxy tunnels other CONNECT hosts without decrypting their bytes', async (t) => {
   const target = createNetServer(socket => socket.pipe(socket));
   const targetPort = await listen(target);
   t.after(() => new Promise(resolve => target.close(resolve)));
   const root = await mkdtemp(join(tmpdir(), 'jev-agy-tunnel-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const proxy = await startAgyProxy({ JEVCOMP_AGY_HOME: root }, { tunnelHost: '127.0.0.1', tunnelPort: targetPort });
+  const proxy = await startAgyProxy({ JEVCOMP_AGY_HOME: root }, { tunnelHost: '127.0.0.1' });
   t.after(() => proxy.close());
   const port = Number(new URL(proxy.url).port);
   const client = connectTcp(port, '127.0.0.1');
   const received = [];
   client.on('data', chunk => received.push(chunk));
   await new Promise(resolve => client.once('connect', resolve));
-  client.write('CONNECT private.example:8443 HTTP/1.1\r\nHost: private.example:8443\r\n\r\nopaque-tunnel-data');
+  client.write(`CONNECT private.example:${targetPort} HTTP/1.1\r\nHost: private.example:${targetPort}\r\n\r\nopaque-tunnel-data`);
   await new Promise(resolve => setTimeout(resolve, 60));
   assert.match(Buffer.concat(received).toString(), /200 Connection Established/);
   assert.match(Buffer.concat(received).toString(), /opaque-tunnel-data/);
@@ -218,6 +252,71 @@ test('Antigravity generation requests are Jev-compacted before forwarding and co
   assert.equal(history[0].status, 'prepared');
   assert.equal(history[1].phase, 'postcompact');
   assert.equal(history[1].status, 'restored');
+});
+
+test('Antigravity requests with body-integrity headers bypass Jev and forward byte-for-byte', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-agy-integrity-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  let jevCalls = 0;
+  const jev = createHttpServer((_req, res) => {
+    jevCalls++;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ answers: {} }));
+  });
+  const jevPort = await listen(jev);
+  t.after(() => new Promise(resolve => jev.close(resolve)));
+
+  const env = {
+    ...process.env,
+    JEVCOMP_AGY_HOME: join(root, 'ca'),
+    JEVCOMP_DATA_DIR: join(root, 'data'),
+    JEVCOMP_CONFIG_DIR: join(root, 'config'),
+    JEVCOMP_PROVIDER: 'typesafe',
+    TYPESAFE_API_KEY: 'test',
+    JEV_BASE_URL: `http://127.0.0.1:${jevPort}`,
+    JEVCOMP_RETRIES: '0',
+    JEVCOMP_PIN_RECENT_MESSAGES: '0',
+    JEVCOMP_MIN_REDUCTION_RATIO: '0',
+    JEVCOMP_AGY_MIN_ELIGIBLE_CHARS: '0',
+  };
+  const certs = await ensureAgyCertificate(env);
+  const ca = await readFile(join(certs.directory, 'ca.crt'));
+  const key = await readFile(join(certs.directory, 'server.key'));
+  const cert = await readFile(join(certs.directory, 'server.crt'));
+
+  let receivedBody = '';
+  let receivedDigest = '';
+  const upstream = createHttpsServer({ key, cert }, async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    receivedBody = Buffer.concat(chunks).toString();
+    receivedDigest = String(req.headers['content-digest'] ?? '');
+    res.end('upstream-ok');
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => new Promise(resolve => upstream.close(resolve)));
+
+  const proxy = await startAgyProxy(env, { upstreamHost: '127.0.0.1', upstreamPort, upstreamCa: ca });
+  t.after(() => proxy.close());
+
+  const payload = {
+    model: 'gemini-test',
+    request: {
+      sessionId: 'signed-session',
+      contents: [
+        { role: 'user', parts: [{ text: 'task' }] },
+        { role: 'model', parts: [{ functionCall: { id: 'c1', name: 'shell', args: { command: 'test' } } }] },
+        { role: 'user', parts: [{ functionResponse: { id: 'c1', name: 'shell', response: { result: 'x'.repeat(8000) } } }] },
+      ],
+    },
+  };
+  const raw = JSON.stringify(payload);
+  const response = await postGeneration(proxy.url, ca, raw, 'Content-Digest: sha-256=:deadbeef:\r\n');
+  assert.match(response, /upstream-ok/);
+  assert.equal(receivedBody, raw);
+  assert.equal(receivedDigest, 'sha-256=:deadbeef:');
+  assert.equal(jevCalls, 0);
 });
 
 test('agy forwards arguments, inherited streams, proxy environment and exit status', async () => {
