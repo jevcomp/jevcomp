@@ -230,6 +230,20 @@ test('uses Codex turn metadata before the legacy compaction prompt fallback', ()
   });
   assert.equal(isCodexCompactionRequest(remoteV2), false);
 
+  const incompleteMetadata = structuredClone(similar);
+  incompleteMetadata.client_metadata['x-codex-turn-metadata'] = JSON.stringify({
+    request_kind: 'compaction',
+    compaction: {},
+  });
+  assert.equal(isCodexCompactionRequest(incompleteMetadata), false);
+
+  const legacyWithIncompleteMetadata = structuredClone(compactionFixture);
+  legacyWithIncompleteMetadata.client_metadata['x-codex-turn-metadata'] = JSON.stringify({
+    request_kind: 'compaction',
+    compaction: {},
+  });
+  assert.equal(isCodexCompactionRequest(legacyWithIncompleteMetadata), true);
+
   const followedByAnotherItem = structuredClone(compactionFixture);
   followedByAnotherItem.input.push({ type: 'message', role: 'user', content: 'ordinary message' });
   assert.equal(isCodexCompactionRequest(followedByAnotherItem), false);
@@ -290,10 +304,21 @@ test('answers a matching compact request with accepted SSE and records it in his
   });
   t.after(async () => { await proxy.close(); await rm(codexHome, { recursive: true, force: true }); });
 
+  const canonicalRequest = structuredClone(compactionFixture);
+  canonicalRequest.client_metadata = {
+    'x-codex-turn-metadata': JSON.stringify({
+      request_kind: 'compaction',
+      session_id: 'canonical-session',
+      thread_id: 'canonical-thread',
+      turn_id: 'canonical-turn',
+      compaction: { implementation: 'responses' },
+    }),
+  };
+  canonicalRequest.input.at(-1).content[0].text = 'custom compaction instruction';
   const response = await fetch(`${proxy.baseUrl}/responses`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(compactionFixture),
+    body: JSON.stringify(canonicalRequest),
   });
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type'), /^text\/event-stream/);
@@ -322,13 +347,14 @@ test('answers a matching compact request with accepted SSE and records it in his
   assert.equal(history[0].host, 'codex');
   assert.equal(history[0].phase, 'precompact');
   assert.equal(history[0].status, 'prepared');
-  assert.equal(history[0].sessionId, 'fixture-session');
+  assert.equal(history[0].sessionId, 'canonical-session');
+  assert.equal(history[0].turnId, 'canonical-turn');
   assert.equal(history[1].status, 'restored');
   assert.equal(history[1].runId, history[0].runId);
   const audits = await auditManifests({ JEVCOMP_DATA_DIR: dataDir });
   assert.equal(audits.manifests.length, 1);
   assert.equal(audits.manifests[0].stage, 'result_produced');
-  assert.equal(audits.manifests[0].sessionId, 'fixture-session');
+  assert.equal(audits.manifests[0].sessionId, 'canonical-session');
   assert.ok(audits.manifests[0].outputHash);
   assert.equal(history[0].auditId, audits.manifests[0].id);
 });

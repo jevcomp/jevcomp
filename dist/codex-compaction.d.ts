@@ -1,4 +1,5 @@
 import type { Message } from './types.js';
+export declare function codexTurnMetadata(value: unknown): Record<string, unknown> | undefined;
 export declare function isCodexCompactionRequest(value: unknown): boolean;
 /**
  * Codex local compaction re-inserts recent user messages outside the summary,

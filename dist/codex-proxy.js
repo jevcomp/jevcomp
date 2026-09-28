@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { launch } from './command.js';
 import { compactMessages, estimateTokens } from './compact.js';
-import { codexCompactionReductionRatio, isCodexCompactionRequest, renderCodexCompactionSummary } from './codex-compaction.js';
+import { codexCompactionReductionRatio, codexTurnMetadata, isCodexCompactionRequest, renderCodexCompactionSummary } from './codex-compaction.js';
 import { jevCompactOptions } from './hooks.js';
 export { isCodexCompactionRequest } from './codex-compaction.js';
 import { appendResponseItem } from './rollout.js';
@@ -198,13 +198,15 @@ async function localCompaction(body, env) {
         appendResponseItem(messages, item);
     const runId = randomUUID();
     const metadata = record(payload.client_metadata) ? payload.client_metadata : {};
-    const sessionId = metadataString(metadata, 'session_id') ?? metadataString(metadata, 'thread_id');
+    const canonicalMetadata = codexTurnMetadata(payload) ?? {};
+    const sessionId = metadataString(canonicalMetadata, 'session_id') ?? metadataString(canonicalMetadata, 'thread_id')
+        ?? metadataString(metadata, 'session_id') ?? metadataString(metadata, 'thread_id');
     const jev = jevCompactOptions(env, 'codex');
     const minimum = userSettings(env, 'codex').minReductionRatio;
     const audit = await beginAudit(env, 'codex', runId, messages, { minReductionRatio: minimum, provider: jev.provider, model: jev.model, maxSummaryTokens: MAX_COMPACTION_SUMMARY_TOKENS }, sessionId);
     const localRun = {
         at: new Date().toISOString(), runId, ...(audit ? { auditId: runId } : {}), sessionId: sessionId ?? runId,
-        turnId: metadataString(metadata, 'turn_id'), model: typeof payload.model === 'string' ? payload.model : undefined,
+        turnId: metadataString(canonicalMetadata, 'turn_id') ?? metadataString(metadata, 'turn_id'), model: typeof payload.model === 'string' ? payload.model : undefined,
         provider: jev.provider, host: 'codex', phase: 'precompact',
     };
     try {

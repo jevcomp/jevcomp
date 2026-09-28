@@ -31,6 +31,9 @@ function turnMetadata(value) {
         return undefined;
     }
 }
+export function codexTurnMetadata(value) {
+    return record(value) ? turnMetadata(value) : undefined;
+}
 function metadataDecision(value) {
     const metadata = turnMetadata(value);
     if (!metadata || typeof metadata.request_kind !== 'string')
@@ -39,7 +42,9 @@ function metadataDecision(value) {
         return false;
     const compaction = record(metadata.compaction) ? metadata.compaction : undefined;
     const implementation = compaction?.implementation;
-    return implementation === undefined || implementation === 'responses';
+    if (typeof implementation !== 'string')
+        return undefined;
+    return implementation === 'responses';
 }
 function matchesLegacyPrompt(value) {
     const input = value.input;

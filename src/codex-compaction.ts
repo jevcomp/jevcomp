@@ -33,13 +33,18 @@ function turnMetadata(value: Record<string, unknown>): Record<string, unknown> |
   }
 }
 
+export function codexTurnMetadata(value: unknown): Record<string, unknown> | undefined {
+  return record(value) ? turnMetadata(value) : undefined;
+}
+
 function metadataDecision(value: Record<string, unknown>): boolean | undefined {
   const metadata = turnMetadata(value);
   if (!metadata || typeof metadata.request_kind !== 'string') return undefined;
   if (metadata.request_kind !== 'compaction') return false;
   const compaction = record(metadata.compaction) ? metadata.compaction : undefined;
   const implementation = compaction?.implementation;
-  return implementation === undefined || implementation === 'responses';
+  if (typeof implementation !== 'string') return undefined;
+  return implementation === 'responses';
 }
 
 function matchesLegacyPrompt(value: Record<string, unknown>): boolean {
