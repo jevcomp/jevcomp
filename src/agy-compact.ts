@@ -11,13 +11,16 @@ type PlanAction = CallDecision['action'];
 interface PartRef {
   contentIndex: number;
   partIndex: number;
-  name: string;
+  kind: 'function' | 'tool';
+  name?: string;
   id?: string;
   value: RecordValue;
 }
 
 interface ResponseRef extends PartRef {
   result: string;
+  resultKey: string;
+  resultInResponse: boolean;
 }
 
 interface Pair {
@@ -73,13 +76,30 @@ function finiteOption(value: number | undefined, fallback: number): number {
 export function createAgyCompactionState(): AgyCompactionState {
   return { sessions: new Map() };
 }
-function requestOf(payload: RecordValue): RecordValue | undefined {
-  return record(payload.request) ? payload.request : undefined;
+function requestOf(payload: RecordValue): RecordValue {
+  return record(payload.request) ? payload.request : payload;
 }
 
 function contentsOf(payload: RecordValue): unknown[] | undefined {
   const request = requestOf(payload);
-  return Array.isArray(request?.contents) ? request.contents : undefined;
+  return Array.isArray(request.contents) ? request.contents : undefined;
+}
+
+function sessionIdOf(payload: RecordValue): string | undefined {
+  const request = requestOf(payload);
+  return strings(request.sessionId) ?? strings(request.session_id)
+    ?? strings(payload.sessionId) ?? strings(payload.session_id)
+    ?? strings(request.conversationId) ?? strings(payload.conversationId)
+    ?? strings(request.requestId) ?? strings(payload.requestId);
+}
+
+function refName(value: RecordValue): string | undefined {
+  const explicit = strings(value.name);
+  if (explicit) return explicit;
+  const toolType = value.toolType;
+  if (typeof toolType === 'string' && toolType.length) return toolType;
+  if (typeof toolType === 'number' && Number.isFinite(toolType)) return String(toolType);
+  return undefined;
 }
 
 function plainText(content: unknown): string {
@@ -99,6 +119,18 @@ function semanticContextKey(contents: readonly unknown[]): string {
   return digest(JSON.stringify(recent));
 }
 
+function stringResult(value: RecordValue, keys: readonly string[]): { result: string; resultKey: string; resultInResponse: boolean } | undefined {
+  for (const key of keys) {
+    if (typeof value[key] === 'string') return { result: value[key] as string, resultKey: key, resultInResponse: false };
+  }
+  const body = record(value.response) ? value.response : undefined;
+  if (!body) return undefined;
+  for (const key of keys) {
+    if (typeof body[key] === 'string') return { result: body[key] as string, resultKey: key, resultInResponse: true };
+  }
+  return undefined;
+}
+
 function collectRefs(contents: readonly unknown[]): { calls: PartRef[]; responses: ResponseRef[] } {
   const calls: PartRef[] = [];
   const responses: ResponseRef[] = [];
@@ -106,18 +138,20 @@ function collectRefs(contents: readonly unknown[]): { calls: PartRef[]; response
     if (!record(content) || !Array.isArray(content.parts)) return;
     content.parts.forEach((part, partIndex) => {
       if (!record(part)) return;
-      if (record(part.functionCall)) {
-        const call = part.functionCall;
-        const name = strings(call.name);
-        if (name) calls.push({ contentIndex, partIndex, name, id: strings(call.id), value: call });
+      for (const [kind, key] of [['function', 'functionCall'], ['tool', 'toolCall']] as const) {
+        if (!record(part[key])) continue;
+        const call = part[key] as RecordValue;
+        calls.push({ contentIndex, partIndex, kind, name: refName(call), id: strings(call.id), value: call });
       }
-      if (record(part.functionResponse)) {
-        const response = part.functionResponse;
-        const name = strings(response.name);
-        const body = record(response.response) ? response.response : undefined;
-        if (name && body && typeof body.result === 'string') {
-          responses.push({ contentIndex, partIndex, name, id: strings(response.id), value: response, result: body.result });
-        }
+      for (const [kind, key, resultKeys] of [
+        ['function', 'functionResponse', ['result']],
+        ['tool', 'toolResponse', ['response_json', 'result', 'output', 'text']],
+      ] as const) {
+        if (!record(part[key])) continue;
+        const response = part[key] as RecordValue;
+        const extracted = stringResult(response, resultKeys);
+        if (!extracted) continue;
+        responses.push({ contentIndex, partIndex, kind, name: refName(response), id: strings(response.id), value: response, ...extracted });
       }
     });
   });
@@ -140,9 +174,19 @@ function pairRefs(contents: readonly unknown[], preserveRecentMessages: number):
   for (const response of responses.sort((a, b) => location(a) - location(b))) {
     let matches: PartRef[] = [];
     if (response.id && callIdCounts.get(response.id) === 1 && responseIdCounts.get(response.id) === 1) {
-      matches = calls.filter((call) => call.id === response.id && call.name === response.name && location(call) < location(response) && !usedCalls.has(call));
-    } else if (!response.id) {
-      matches = calls.filter((call) => call.name === response.name && location(call) < location(response) && !usedCalls.has(call));
+      matches = calls.filter((call) =>
+        call.id === response.id &&
+        call.kind === response.kind &&
+        (!call.name || !response.name || call.name === response.name) &&
+        location(call) < location(response) &&
+        !usedCalls.has(call));
+    } else if (!response.id && response.name) {
+      matches = calls.filter((call) =>
+        !call.id &&
+        call.kind === response.kind &&
+        call.name === response.name &&
+        location(call) < location(response) &&
+        !usedCalls.has(call));
     }
     if (matches.length !== 1) continue;
     usedCalls.add(matches[0]!);
@@ -180,8 +224,12 @@ function toMessages(contents: readonly unknown[], pairs: readonly Pair[]): Messa
       text: plainText(content),
       toolCalls: calls.map((pair) => ({
         id: pair.callId,
-        name: pair.call.name,
-        input: record(pair.call.value.args) ? pair.call.value.args : pair.call.value.args ?? {},
+        name: pair.call.name ?? pair.call.kind,
+        input: record(pair.call.value.args)
+          ? pair.call.value.args
+          : record(pair.call.value.arguments)
+            ? pair.call.value.arguments
+            : pair.call.value.args ?? pair.call.value.arguments ?? pair.call.value.arguments_json ?? {},
       })),
       ...(responses.length ? { toolResults: responses.map((pair) => ({ callId: pair.callId, output: pair.response.result })) } : {}),
     };
@@ -238,14 +286,19 @@ function clonePayload(payload: RecordValue): RecordValue {
   return JSON.parse(JSON.stringify(payload)) as RecordValue;
 }
 
-function responseResult(payload: RecordValue, pair: Pair): { body: RecordValue; value: string } | undefined {
+function responseResult(payload: RecordValue, pair: Pair): { body: RecordValue; key: string; value: string } | undefined {
   const contents = contentsOf(payload);
   const content = contents?.[pair.response.contentIndex];
   if (!record(content) || !Array.isArray(content.parts)) return undefined;
   const part = content.parts[pair.response.partIndex];
-  if (!record(part) || !record(part.functionResponse) || !record(part.functionResponse.response)) return undefined;
-  const value = part.functionResponse.response.result;
-  return typeof value === 'string' ? { body: part.functionResponse.response, value } : undefined;
+  if (!record(part)) return undefined;
+  const holderKey = pair.response.kind === 'function' ? 'functionResponse' : 'toolResponse';
+  const holder = record(part[holderKey]) ? part[holderKey] as RecordValue : undefined;
+  if (!holder) return undefined;
+  const body = pair.response.resultInResponse && record(holder.response) ? holder.response : holder;
+  if (!body) return undefined;
+  const value = body[pair.response.resultKey];
+  return typeof value === 'string' ? { body, key: pair.response.resultKey, value } : undefined;
 }
 
 function applyActions(payload: RecordValue, pairs: readonly Pair[], actions: Map<string, PlanAction>, head: number, tail: number): RecordValue {
@@ -258,7 +311,7 @@ function applyActions(payload: RecordValue, pairs: readonly Pair[], actions: Map
     const replacement = action === 'drop_call'
       ? shortenToolResult(current.value, 0, 0)
       : shortenToolResult(current.value, head, tail);
-    if (replacement.length < current.value.length) current.body.result = replacement;
+    if (replacement.length < current.value.length) current.body[current.key] = replacement;
   }
   return out;
 }
@@ -294,10 +347,9 @@ export async function compactAgyPayload(
   options: AgyCompactOptions = {},
 ): Promise<AgyCompactResult | undefined> {
   if (!record(input)) return undefined;
-  const request = requestOf(input);
   const contents = contentsOf(input);
-  const sessionId = strings(request?.sessionId);
-  if (!request || !contents || !sessionId || contents.length < 2) return undefined;
+  const sessionId = sessionIdOf(input);
+  if (!contents || !sessionId || contents.length < 2) return undefined;
 
   const preserveRecentMessages = Math.max(0, Math.floor(finiteOption(options.preserveRecentMessages, 6)));
   const pairs = pairRefs(contents, preserveRecentMessages);

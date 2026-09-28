@@ -18,11 +18,29 @@ export function createAgyCompactionState() {
     return { sessions: new Map() };
 }
 function requestOf(payload) {
-    return record(payload.request) ? payload.request : undefined;
+    return record(payload.request) ? payload.request : payload;
 }
 function contentsOf(payload) {
     const request = requestOf(payload);
-    return Array.isArray(request?.contents) ? request.contents : undefined;
+    return Array.isArray(request.contents) ? request.contents : undefined;
+}
+function sessionIdOf(payload) {
+    const request = requestOf(payload);
+    return strings(request.sessionId) ?? strings(request.session_id)
+        ?? strings(payload.sessionId) ?? strings(payload.session_id)
+        ?? strings(request.conversationId) ?? strings(payload.conversationId)
+        ?? strings(request.requestId) ?? strings(payload.requestId);
+}
+function refName(value) {
+    const explicit = strings(value.name);
+    if (explicit)
+        return explicit;
+    const toolType = value.toolType;
+    if (typeof toolType === 'string' && toolType.length)
+        return toolType;
+    if (typeof toolType === 'number' && Number.isFinite(toolType))
+        return String(toolType);
+    return undefined;
 }
 function plainText(content) {
     if (!record(content) || !Array.isArray(content.parts))
@@ -42,6 +60,20 @@ function semanticContextKey(contents) {
     }).slice(-4);
     return digest(JSON.stringify(recent));
 }
+function stringResult(value, keys) {
+    for (const key of keys) {
+        if (typeof value[key] === 'string')
+            return { result: value[key], resultKey: key, resultInResponse: false };
+    }
+    const body = record(value.response) ? value.response : undefined;
+    if (!body)
+        return undefined;
+    for (const key of keys) {
+        if (typeof body[key] === 'string')
+            return { result: body[key], resultKey: key, resultInResponse: true };
+    }
+    return undefined;
+}
 function collectRefs(contents) {
     const calls = [];
     const responses = [];
@@ -51,19 +83,23 @@ function collectRefs(contents) {
         content.parts.forEach((part, partIndex) => {
             if (!record(part))
                 return;
-            if (record(part.functionCall)) {
-                const call = part.functionCall;
-                const name = strings(call.name);
-                if (name)
-                    calls.push({ contentIndex, partIndex, name, id: strings(call.id), value: call });
+            for (const [kind, key] of [['function', 'functionCall'], ['tool', 'toolCall']]) {
+                if (!record(part[key]))
+                    continue;
+                const call = part[key];
+                calls.push({ contentIndex, partIndex, kind, name: refName(call), id: strings(call.id), value: call });
             }
-            if (record(part.functionResponse)) {
-                const response = part.functionResponse;
-                const name = strings(response.name);
-                const body = record(response.response) ? response.response : undefined;
-                if (name && body && typeof body.result === 'string') {
-                    responses.push({ contentIndex, partIndex, name, id: strings(response.id), value: response, result: body.result });
-                }
+            for (const [kind, key, resultKeys] of [
+                ['function', 'functionResponse', ['result']],
+                ['tool', 'toolResponse', ['response_json', 'result', 'output', 'text']],
+            ]) {
+                if (!record(part[key]))
+                    continue;
+                const response = part[key];
+                const extracted = stringResult(response, resultKeys);
+                if (!extracted)
+                    continue;
+                responses.push({ contentIndex, partIndex, kind, name: refName(response), id: strings(response.id), value: response, ...extracted });
             }
         });
     });
@@ -87,10 +123,18 @@ function pairRefs(contents, preserveRecentMessages) {
     for (const response of responses.sort((a, b) => location(a) - location(b))) {
         let matches = [];
         if (response.id && callIdCounts.get(response.id) === 1 && responseIdCounts.get(response.id) === 1) {
-            matches = calls.filter((call) => call.id === response.id && call.name === response.name && location(call) < location(response) && !usedCalls.has(call));
+            matches = calls.filter((call) => call.id === response.id &&
+                call.kind === response.kind &&
+                (!call.name || !response.name || call.name === response.name) &&
+                location(call) < location(response) &&
+                !usedCalls.has(call));
         }
-        else if (!response.id) {
-            matches = calls.filter((call) => call.name === response.name && location(call) < location(response) && !usedCalls.has(call));
+        else if (!response.id && response.name) {
+            matches = calls.filter((call) => !call.id &&
+                call.kind === response.kind &&
+                call.name === response.name &&
+                location(call) < location(response) &&
+                !usedCalls.has(call));
         }
         if (matches.length !== 1)
             continue;
@@ -128,8 +172,12 @@ function toMessages(contents, pairs) {
             text: plainText(content),
             toolCalls: calls.map((pair) => ({
                 id: pair.callId,
-                name: pair.call.name,
-                input: record(pair.call.value.args) ? pair.call.value.args : pair.call.value.args ?? {},
+                name: pair.call.name ?? pair.call.kind,
+                input: record(pair.call.value.args)
+                    ? pair.call.value.args
+                    : record(pair.call.value.arguments)
+                        ? pair.call.value.arguments
+                        : pair.call.value.args ?? pair.call.value.arguments ?? pair.call.value.arguments_json ?? {},
             })),
             ...(responses.length ? { toolResults: responses.map((pair) => ({ callId: pair.callId, output: pair.response.result })) } : {}),
         };
@@ -198,10 +246,17 @@ function responseResult(payload, pair) {
     if (!record(content) || !Array.isArray(content.parts))
         return undefined;
     const part = content.parts[pair.response.partIndex];
-    if (!record(part) || !record(part.functionResponse) || !record(part.functionResponse.response))
+    if (!record(part))
         return undefined;
-    const value = part.functionResponse.response.result;
-    return typeof value === 'string' ? { body: part.functionResponse.response, value } : undefined;
+    const holderKey = pair.response.kind === 'function' ? 'functionResponse' : 'toolResponse';
+    const holder = record(part[holderKey]) ? part[holderKey] : undefined;
+    if (!holder)
+        return undefined;
+    const body = pair.response.resultInResponse && record(holder.response) ? holder.response : holder;
+    if (!body)
+        return undefined;
+    const value = body[pair.response.resultKey];
+    return typeof value === 'string' ? { body, key: pair.response.resultKey, value } : undefined;
 }
 function applyActions(payload, pairs, actions, head, tail) {
     const out = clonePayload(payload);
@@ -216,7 +271,7 @@ function applyActions(payload, pairs, actions, head, tail) {
             ? shortenToolResult(current.value, 0, 0)
             : shortenToolResult(current.value, head, tail);
         if (replacement.length < current.value.length)
-            current.body.result = replacement;
+            current.body[current.key] = replacement;
     }
     return out;
 }
@@ -245,10 +300,9 @@ function sessionPlan(state, sessionId, nextContext) {
 export async function compactAgyPayload(input, asker, state, options = {}) {
     if (!record(input))
         return undefined;
-    const request = requestOf(input);
     const contents = contentsOf(input);
-    const sessionId = strings(request?.sessionId);
-    if (!request || !contents || !sessionId || contents.length < 2)
+    const sessionId = sessionIdOf(input);
+    if (!contents || !sessionId || contents.length < 2)
         return undefined;
     const preserveRecentMessages = Math.max(0, Math.floor(finiteOption(options.preserveRecentMessages, 6)));
     const pairs = pairRefs(contents, preserveRecentMessages);

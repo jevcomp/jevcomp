@@ -59,6 +59,37 @@ test('Antigravity truncation edits only the paired string result and preserves G
   assert.match(response.response.result, /jevcomp omitted/);
 });
 
+test('Antigravity supports the current toolCall/toolResponse wire shape', async () => {
+  const original = {
+    project: 'project',
+    model: 'gemini-test',
+    requestId: 'request-tool-shape',
+    request: {
+      session_id: 'session-tool-shape',
+      contents: [
+        { role: 'user', parts: [{ text: 'run the tests' }] },
+        { role: 'model', parts: [{ toolCall: { id: 'tool_1', toolType: 'RUN_COMMAND', args: { command: 'npm test' } }, thoughtSignature: 'sig-stays' }] },
+        { role: 'user', parts: [{ toolResponse: { id: 'tool_1', toolType: 'RUN_COMMAND', response: { output: 'HEAD\n' + 'noise '.repeat(1000) + '\nTAIL ERROR', metadata: 'keep' } } }] },
+        { role: 'model', parts: [{ text: 'checking the result' }] },
+      ],
+    },
+  };
+  const result = await compactAgyPayload(original, askerFor(0.9, 0.1), createAgyCompactionState(), {
+    preserveRecentMessages: 0,
+    truncateHeadChars: 80,
+    truncateTailChars: 80,
+    minEligibleChars: 0,
+    minReductionRatio: 0,
+  });
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.payload.request.contents[1].parts[0], original.request.contents[1].parts[0]);
+  const response = result.payload.request.contents[2].parts[0].toolResponse.response;
+  assert.equal(response.metadata, 'keep');
+  assert.match(response.output, /^HEAD/);
+  assert.match(response.output, /TAIL ERROR$/);
+  assert.match(response.output, /jevcomp omitted/);
+});
+
 test('a Jev drop decision keeps the Gemini call/signature and omits only its result', async () => {
   const original = payload('valuable '.repeat(1000));
   const result = await compactAgyPayload(original, askerFor(0.1, 0.1), createAgyCompactionState(), {
