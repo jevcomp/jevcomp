@@ -25,7 +25,9 @@ export interface JevCut {
     truncated: Readonly<Record<string, string>>;
 }
 export declare function toJevMessages(messages: readonly ClaudeMessage[]): Message[];
-/** Content-bearing characters in the actual Claude hook messages, excluding internal handles and object-key overhead. */
+/** Serialized Claude hook payload size, excluding internal handles that are not model context. */
 export declare function claudeMessageChars(messages: readonly ClaudeMessage[]): number;
+/** Refine a requested cut against host fields jevcomp does not understand. */
+export declare function safeJevCut(messages: readonly ClaudeMessage[], cut: JevCut): JevCut;
 /** Messages Jev left alone go back as the engine's own objects; edited ones are rebuilt without the engine's handle. */
 export declare function applyJevCut(messages: readonly ClaudeMessage[], cut: JevCut): ClaudeMessage[];

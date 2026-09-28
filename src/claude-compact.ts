@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { beginAudit } from './audit.js';
 import { compactMessages, reductionRatio } from './compact.js';
-import { applyJevCut, claudeMessageChars, toJevMessages, type ClaudeMessage, type JevCut } from './claude.js';
+import { applyJevCut, claudeMessageChars, safeJevCut, toJevMessages, type ClaudeMessage, type JevCut } from './claude.js';
 import { jevCompactOptions } from './hooks.js';
 import { userSettings } from './settings.js';
 import { tryAppendHistory } from './store.js';
@@ -34,24 +34,40 @@ export async function compactForClaude(body: Record<string, unknown>, baseEnv: R
         if (result.decisions.some((d) => d.callId === output.callId && d.action === 'truncate_result')) truncated[output.callId] = output.output;
       }
     }
-    const cut: JevCut = { dropped: result.decisions.filter((d) => d.action === 'drop_call').map((d) => d.callId), truncated };
+    const requestedCut: JevCut = { dropped: result.decisions.filter((d) => d.action === 'drop_call').map((d) => d.callId), truncated };
+    const cut = hostMessages ? safeJevCut(hostMessages, requestedCut) : requestedCut;
+    const effectiveDropped = new Set(cut.dropped);
+    const decisions = result.decisions.map((decision) =>
+      decision.action === 'drop_call' && !effectiveDropped.has(decision.callId)
+        ? { ...decision, action: 'keep' as const, savedChars: 0 }
+        : decision);
     const hostAfter = hostMessages ? applyJevCut(hostMessages, cut) : undefined;
+    if (hostAfter && audit) audit.observe('output', toJevMessages(hostAfter));
     const hostBeforeChars = hostMessages ? claudeMessageChars(hostMessages) : result.stats.charsBefore;
     const hostAfterChars = hostAfter ? claudeMessageChars(hostAfter) : result.stats.charsAfter;
     const actualReduction = hostBeforeChars ? (hostBeforeChars - hostAfterChars) / hostBeforeChars : reductionRatio(result);
-    const stats = { ...result.stats, charsBefore: hostBeforeChars, charsAfter: hostAfterChars };
-    if (actualReduction < minimum) {
-      const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'skipped', stats, decisions: result.decisions, detail: `reduction below ${minimum}` }, env);
-      await audit?.finish('rejected', 'below_minimum', recorded);
-      return { apply: false, reason: `reduction below ${Math.round(minimum * 100)}%` };
+    const stats = {
+      ...result.stats,
+      charsBefore: hostBeforeChars,
+      charsAfter: hostAfterChars,
+      callsDropped: decisions.filter((decision) => decision.action === 'drop_call').length,
+      resultsTruncated: decisions.filter((decision) => decision.action === 'truncate_result').length,
+      kept: decisions.filter((decision) => !decision.pinned && decision.action === 'keep').length,
+    };
+    if (actualReduction <= 0 || actualReduction < minimum) {
+      const reason = actualReduction <= 0 ? 'no_reduction' : 'below_minimum';
+      const detail = actualReduction <= 0 ? 'host-safe cut made no reduction' : `reduction below ${minimum}`;
+      const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'skipped', stats, decisions, detail }, env);
+      await audit?.finish('rejected', reason, recorded);
+      return { apply: false, reason: actualReduction <= 0 ? 'no reduction' : `reduction below ${Math.round(minimum * 100)}%` };
     }
-    const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'prepared', stats, decisions: result.decisions, retainedChars: hostAfterChars }, env);
+    const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'prepared', stats, decisions, retainedChars: hostAfterChars }, env);
     const restoreRecorded = await tryAppendHistory({ ...row, at: new Date().toISOString(), phase: 'restore', status: 'restored', stats, retainedChars: hostAfterChars, injectedChars: hostAfterChars, injectedPayloadChars: hostAfterChars, detail: 'Claude Code kept the Jev-cut conversation instead of a summary' }, env);
     if (!restoreRecorded) audit?.manifest.gaps.push('restore history not recorded');
     const response = {
       apply: true,
       ...cut,
-      summary: `${Math.round(actualReduction * 100)}% cut: ${result.stats.callsDropped} removed, ${result.stats.resultsTruncated} shortened`,
+      summary: `${Math.round(actualReduction * 100)}% cut: ${stats.callsDropped} removed, ${stats.resultsTruncated} shortened`,
     };
     await audit?.finish('result_produced', 'cut_returned_to_hook', recorded, response);
     return response;

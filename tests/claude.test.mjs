@@ -43,8 +43,11 @@ test('Claude function hook passes the native session identity without adding mod
 
 test('a Jev cut keeps untouched Claude messages as the engine gave them and rebuilds edited ones', () => {
   const messages = transcript();
+  messages[1].hostMetadata = { preserve: true };
+  messages[2].hostMetadata = { preserve: true };
   messages[1].toolUses[1].result = { stdout: 'y'.repeat(4000), metadata: 'large structured copy' };
   messages[2].toolResults[1].result = { stdout: 'y'.repeat(4000), metadata: 'large structured copy' };
+  messages[2].toolResults[1].hostMetadata = { opaque: 'keep' };
   const out = applyJevCut(messages, { dropped: ['a'], truncated: { b: 'yyy [omitted]' } });
   assert.equal(out[0], messages[0]);
   assert.equal(out[3], messages[3]);
@@ -52,8 +55,93 @@ test('a Jev cut keeps untouched Claude messages as the engine gave them and rebu
   assert.deepEqual(out[1].toolUses.map((u) => u.tool_use_id), ['b']);
   assert.equal(out[1].toolUses[0].text, 'yyy [omitted]');
   assert.equal('result' in out[1].toolUses[0], false);
-  assert.deepEqual(out[2].toolResults, [{ tool_use_id: 'b', text: 'yyy [omitted]', isError: false }]);
+  assert.deepEqual(out[1].hostMetadata, { preserve: true });
+  assert.equal(out[1].handle, undefined);
+  assert.deepEqual(out[2].toolResults, [{ tool_use_id: 'b', text: 'yyy [omitted]', isError: false, hostMetadata: { opaque: 'keep' } }]);
+  assert.deepEqual(out[2].hostMetadata, { preserve: true });
   assert.deepEqual(toJevMessages(messages)[2].toolResults.map((r) => r.callId), ['a', 'b']);
+});
+
+test('Claude fail-open protects the whole pair when a drop would empty a message with unknown host fields', () => {
+  const callMessage = {
+    role: 'assistant',
+    text: '',
+    toolUses: [{ tool_use_id: 'x', tool: 'Read', input: { file_path: 'x' } }],
+    handle: 'h1',
+    futureHostField: { mustSurvive: true },
+  };
+  const resultMessage = {
+    role: 'user',
+    text: '',
+    toolUses: [],
+    toolResults: [{ tool_use_id: 'x', text: 'result', isError: false }],
+    handle: 'h2',
+  };
+  const out = applyJevCut([callMessage, resultMessage], { dropped: ['x'], truncated: {} });
+  assert.deepEqual(out, [callMessage, resultMessage]);
+  assert.equal(out[0], callMessage);
+  assert.equal(out[1], resultMessage);
+});
+
+test('Claude never returns an empty compacted conversation', () => {
+  const messages = [
+    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'x', tool: 'Read', input: { file_path: 'x' } }] },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'x', text: 'result', isError: false }] },
+  ];
+  const out = applyJevCut(messages, { dropped: ['x'], truncated: {} });
+  assert.deepEqual(out, messages);
+  assert.ok(out.length > 0);
+});
+
+test('Claude records host-protected drops as keeps instead of claiming an unapplied removal', async (t) => {
+  const jev = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const questions = JSON.parse(body).questions;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({
+      answers: Object.fromEntries(Object.keys(questions).map((key) => [key, { noul: 0.1 }])),
+    }));
+  });
+  await new Promise((resolve) => jev.listen(0, '127.0.0.1', resolve));
+  t.after(() => jev.close());
+
+  const root = await mkdtemp(join(tmpdir(), 'jev-claude-protected-'));
+  const env = {
+    ...process.env,
+    JEVCOMP_DATA_DIR: join(root, 'data'),
+    JEVCOMP_CONFIG_DIR: join(root, 'config'),
+    JEVCOMP_PROVIDER: 'typesafe',
+    TYPESAFE_API_KEY: 'test',
+    JEV_BASE_URL: `http://127.0.0.1:${jev.address().port}`,
+    JEVCOMP_RETRIES: '0',
+  };
+  for (const name of ['JEVCOMP_PIN_RECENT_MESSAGES', 'JEVCOMP_PRESERVE_RECENT', 'JEVCOMP_LOSS_THRESHOLD', 'JEVCOMP_KEEP_THRESHOLD', 'JEVCOMP_MIN_REDUCTION_RATIO', 'JEVCOMP_MIN_REDUCTION', 'JEVCOMP_SETTINGS_FILE']) delete env[name];
+  await setUserSetting('pin-recent-messages', '0', env, 'claude');
+  await setUserSetting('loss-threshold', '0.5', env, 'claude');
+  await setUserSetting('min-reduction-ratio', '0', env, 'claude');
+
+  const hostMessages = [
+    { role: 'user', text: 'task', toolUses: [] },
+    {
+      role: 'assistant',
+      text: '',
+      toolUses: [{ tool_use_id: 'x', tool: 'Read', input: { file_path: 'x' } }],
+      futureHostField: { mustSurvive: true },
+    },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'x', text: 'x'.repeat(4000), isError: false }] },
+    { role: 'assistant', text: 'continue', toolUses: [] },
+  ];
+  const response = await compactForClaude({ hostMessages }, env);
+  assert.equal(response.apply, false);
+  assert.equal(response.reason, 'no reduction');
+
+  const history = (await readFile(join(root, 'data', 'history.jsonl'), 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(history.length, 1);
+  assert.equal(history[0].status, 'skipped');
+  assert.equal(history[0].stats.callsDropped, 0);
+  assert.equal(history[0].decisions[0].action, 'keep');
+  assert.equal(history[0].decisions[0].savedChars, 0);
 });
 
 test('Claude minimum reduction uses the actual hook payload, including structured result copies', async (t) => {
