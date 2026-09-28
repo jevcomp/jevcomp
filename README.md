@@ -25,7 +25,7 @@ npm install -g --install-links github:jevcomp/jevcomp
 jevcomp install
 ```
 
-`install` asks which agents to connect (Codex, Claude Code, Antigravity or all), the provider and the key. To skip the questions: `jevcomp install openrouter codex` (or `typesafe`, and `claude`, `agy` or `all`). Run it again to change the key or add an agent. The agents share the key, the settings, the history and the dashboard.
+`install` asks which agents to connect (Codex, Claude Code, Antigravity or all), the provider and the key. To skip the questions: `jevcomp install openrouter codex` (or `typesafe`, and `claude`, `agy` or `all`). Run it again to change the key or add an agent. The agents share the provider key, history and dashboard; pruning settings remain isolated per agent.
 
 ## Use
 

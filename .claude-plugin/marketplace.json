@@ -1,13 +1,13 @@
 {
   "name": "jevcomp",
-  "description": "jevcomp: Jev-guided compaction for Claude Code and Codex.",
+  "description": "jevcomp: Jev-guided context compaction for Claude Code, Codex and Antigravity.",
   "owner": { "name": "jevcomp", "url": "https://github.com/jevcomp" },
   "plugins": [
     {
       "name": "jevcomp",
       "source": "./",
       "description": "Jev decides what Claude Code keeps when it compacts, instead of a model-written summary.",
-      "version": "0.7.6",
+      "version": "0.7.7",
       "license": "MIT"
     }
   ]
