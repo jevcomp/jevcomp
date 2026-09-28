@@ -43,7 +43,7 @@ function runKey(row) {
     return row.runId ?? `${row.sessionId}:${row.turnId ?? ''}:${row.at}`;
 }
 function isDirectCompaction(row) {
-    return row?.host === 'codex' && row.phase === 'postcompact' && row.status === 'restored';
+    return (row?.host === 'codex' || row?.host === 'agy') && row.phase === 'postcompact' && row.status === 'restored';
 }
 /** Build only measured statistics. No chars/4 or claimed Codex billing-token savings. */
 export async function stats(env = process.env, agent) {

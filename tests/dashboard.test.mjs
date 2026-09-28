@@ -39,6 +39,18 @@ test('Codex proxy compaction displays returned text even without a legacy inject
   assert.equal(mixed.deliveredChars, 4700);
 });
 
+test('Antigravity proxy reductions are counted as direct compactions', async () => {
+  const env = { JEVCOMP_DATA_DIR: await mkdtemp(join(tmpdir(), 'jev-dashboard-agy-')) };
+  const row = { at: '2026-09-27T12:00:00Z', runId: 'agy', sessionId: 'agy-session', host: 'agy', stats: compactStats, retainedChars: 4000, decisions };
+  await appendHistory({ ...row, phase: 'precompact', status: 'prepared' }, env);
+  await appendHistory({ ...row, phase: 'postcompact', status: 'restored', injectedPayloadChars: 0, injectedChars: 0 }, env);
+  const summary = await stats(env, 'agy');
+  assert.equal(summary.runs[0].status, 'restored');
+  assert.equal(summary.runs[0].directCompaction, true);
+  assert.equal(summary.directCompactions, 1);
+  assert.equal(summary.deliveredChars, 4000);
+});
+
 test('dashboard reports measured impact without invented token-savings estimates', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'jev-dashboard-'));
   const env = { JEVCOMP_DATA_DIR: root, JEVCOMP_CONFIG_DIR: join(root, 'config') };

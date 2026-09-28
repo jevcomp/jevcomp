@@ -23,4 +23,5 @@ export declare function runAgy(args: readonly string[], env?: Record<string, str
     spawn?: typeof spawn;
     isInstalled?: (thumbprint: string) => boolean;
     startProxy?: typeof startAgyProxy;
+    startDashboard?: () => Promise<unknown>;
 }): Promise<number>;

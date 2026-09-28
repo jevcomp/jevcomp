@@ -221,10 +221,11 @@ test('Antigravity generation requests are Jev-compacted before forwarding and co
 });
 
 test('agy forwards arguments, inherited streams, proxy environment and exit status', async () => {
-  let invocation, closed = false;
+  let invocation, closed = false, dashboardAttempted = false;
   const env = { PATH: process.env.PATH };
   const status = await runAgy(['--model', 'name with spaces'], env, {
     isInstalled: () => true,
+    startDashboard: async () => { dashboardAttempted = true; },
     startProxy: async () => ({ url: 'http://127.0.0.1:32100', close: async () => { closed = true; } }),
     spawn: (command, args, options) => {
       invocation = { command, args, options };
@@ -238,6 +239,7 @@ test('agy forwards arguments, inherited streams, proxy environment and exit stat
   assert.deepEqual(invocation.args, ['--model', 'name with spaces']);
   assert.equal(invocation.options.stdio, 'inherit');
   assert.equal(invocation.options.env.HTTPS_PROXY, 'http://127.0.0.1:32100');
+  assert.equal(dashboardAttempted, true);
   assert.equal(closed, true);
 });
 

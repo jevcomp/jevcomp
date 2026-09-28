@@ -101,7 +101,7 @@ function runKey(row: HistoryRow): string {
 }
 
 function isDirectCompaction(row: HistoryRow | undefined): boolean {
-  return row?.host === 'codex' && row.phase === 'postcompact' && row.status === 'restored';
+  return (row?.host === 'codex' || row?.host === 'agy') && row.phase === 'postcompact' && row.status === 'restored';
 }
 
 /** Build only measured statistics. No chars/4 or claimed Codex billing-token savings. */

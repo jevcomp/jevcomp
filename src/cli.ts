@@ -45,14 +45,15 @@ function help(): void {
   ${command} agy [args]   Run Antigravity through the local proxy
   ${command} audit        Configure and inspect local decision evidence
 
-Dashboard: ${dashboardAddress()} (opens with each Codex or Claude Code session)`);
+Dashboard: ${dashboardAddress()} (opens with Codex, Claude Code and Antigravity sessions)`);
 }
 
 type Agent = 'codex' | 'claude' | 'agy';
 const AGENT_NAMES: Record<Agent, string> = { codex: 'Codex', claude: 'Claude Code', agy: 'Antigravity' };
 
 function agentArgs(args: readonly string[]): Agent[] | undefined {
-  if (args.includes('all') || args.includes('both')) return ['codex', 'claude'];
+  if (args.includes('all')) return ['codex', 'claude', 'agy'];
+  if (args.includes('both')) return ['codex', 'claude'];
   const picked = (['codex', 'claude', 'agy'] as const).filter((agent) => args.includes(agent));
   return picked.length ? picked : undefined;
 }
@@ -62,11 +63,7 @@ async function chooseAgents(args: readonly string[]): Promise<Agent[]> {
   if (requested) return requested;
   const found = (['codex', 'claude', 'agy'] as const).filter(commandExists);
   if (!found.length) throw new Error('none of codex, claude or agy was found; install one of them first');
-  const withoutCertificate = found.filter((agent) => agent !== 'agy');
-  if (!interactive() || found.length === 1) {
-    if (!withoutCertificate.length) throw new Error('only Antigravity was found; run `jevcomp install agy` to install its certificate');
-    return withoutCertificate;
-  }
+  if (!interactive() || found.length === 1) return found;
   const names = found.map((agent, index) => `${index + 1}) ${AGENT_NAMES[agent]}`).join('  ');
   const answer = await ask(`Install for: ${names}  ${found.length + 1}) all  (e.g. 1,3) [${found.length + 1}]: `);
   if (!answer || answer === String(found.length + 1)) return [...found];
@@ -177,10 +174,8 @@ async function saveKey(provider: Exclude<JevProvider, 'auto'>): Promise<void> {
 
 async function install(args: readonly string[]): Promise<void> {
   const agents = await chooseAgents(args);
-  if (agents.some((agent) => agent !== 'agy')) {
-    const provider = await chooseProvider(args.find((arg) => !['codex', 'claude', 'agy', 'all', 'both'].includes(arg)));
-    await saveKey(provider);
-  }
+  const provider = await chooseProvider(args.find((arg) => !['codex', 'claude', 'agy', 'all', 'both'].includes(arg)));
+  await saveKey(provider);
   if (agents.includes('claude')) await installClaude();
   if (agents.includes('codex')) {
     await removeLegacyHooks(process.env);
@@ -197,8 +192,8 @@ async function install(args: readonly string[]): Promise<void> {
       console.error(`Antigravity was not installed: the certificate was not accepted (${error instanceof Error ? error.message : String(error)}). Run \`jevcomp install agy\` to try again.`);
     }
   }
-  const sessions = agents.filter((agent) => agent !== 'agy').map((agent) => AGENT_NAMES[agent]).join(' or ');
-  if (sessions) console.log(`Dashboard: ${dashboardAddress()} (opens with each ${sessions} session)`);
+  const sessions = agents.map((agent) => AGENT_NAMES[agent]).join(', ');
+  if (sessions) console.log(`Dashboard: ${dashboardAddress()} (opens with ${sessions})`);
 }
 
 async function uninstall(args: readonly string[]): Promise<void> {
@@ -258,7 +253,7 @@ async function main(): Promise<void> {
     process.exitCode = await runCodex(args, process.env, { startDashboard: () => ensureDashboard(dashboardPort(process.env), process.env) });
     return;
   }
-  if (cmd === 'agy') { process.exitCode = await runAgy(args); return; }
+  if (cmd === 'agy') { process.exitCode = await runAgy(args, process.env, { startDashboard: () => ensureDashboard(dashboardPort(process.env), process.env) }); return; }
 
   if (cmd === 'doctor') {
     const value = await readiness();

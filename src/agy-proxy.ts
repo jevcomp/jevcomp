@@ -209,7 +209,8 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
   };
 }
 
-export async function runAgy(args: readonly string[], env = process.env, options: { spawn?: typeof spawn; isInstalled?: (thumbprint: string) => boolean; startProxy?: typeof startAgyProxy } = {}): Promise<number> {
+export async function runAgy(args: readonly string[], env = process.env, options: { spawn?: typeof spawn; isInstalled?: (thumbprint: string) => boolean; startProxy?: typeof startAgyProxy; startDashboard?: () => Promise<unknown> } = {}): Promise<number> {
+  try { await options.startDashboard?.(); } catch {}
   let proxy: Awaited<ReturnType<typeof startAgyProxy>> | undefined;
   try {
     const certificate = await ensureAgyCertificate(env);

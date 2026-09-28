@@ -239,6 +239,10 @@ export async function startAgyProxy(env = process.env, options = {}) {
     };
 }
 export async function runAgy(args, env = process.env, options = {}) {
+    try {
+        await options.startDashboard?.();
+    }
+    catch { }
     let proxy;
     try {
         const certificate = await ensureAgyCertificate(env);

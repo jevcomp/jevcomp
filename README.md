@@ -1,14 +1,14 @@
 # jevcomp
 
-When a conversation gets long, Codex, Claude Code and Antigravity **compact** it: they replace the old history with a summary written by the model. Exact details get lost that way (an error message, a file already read, a test result), and writing the summary costs a large request.
+Long coding sessions accumulate tool output that gets sent back to the model. Codex and Claude Code eventually compact that history; Antigravity sends a growing Gemini-style `contents` history. Either way, stale tool evidence consumes context, while model-written summaries can lose exact details such as an error message, a file already read, or a test result.
 
 jevcomp uses **Jev**, a small, fast AI model that only answers yes/no questions, to decide which old command outputs still matter:
 
 - **Codex:** started with `jevcomp codex`, the compaction request never reaches OpenAI: jevcomp answers it with what Jev kept.
 - **Claude Code:** there is no summary. Jev removes or shortens old command outputs and the rest of the conversation stays word for word, which also skips the summary request.
-- **Antigravity (experimental):** `jevcomp agy` runs it through jevcomp, but saves nothing yet.
+- **Antigravity (experimental):** `jevcomp agy` uses Jev to shorten old paired tool results before generation requests while preserving Gemini tool calls, signatures and unknown payload fields.
 
-Your own messages are never removed. If anything fails, the agent compacts the way it normally does. Each compaction makes a few small Jev requests, billed to your OpenRouter or TypeSafe key.
+Your own messages are never removed. If anything fails, the original agent request passes through or native compaction runs normally. Jev is called only for eligible old tool evidence, billed to your OpenRouter or TypeSafe key.
 
 ## Before you start
 
@@ -35,11 +35,11 @@ After `jevcomp install`, open each agent like this:
 |---|---|---|
 | Codex | `jevcomp codex` | Saves tokens: jevcomp answers the compaction itself. Plain `codex` saves nothing. |
 | Claude Code | `claude` (as usual) | Saves tokens on every compaction. The first time, restart Claude Code once. |
-| Antigravity (experimental) | `jevcomp agy` | Runs through jevcomp but saves nothing yet: jevcomp does not know yet which Antigravity request is the compaction, so it has nothing to replace. |
+| Antigravity (experimental) | `jevcomp agy` | Jev selectively shortens old paired tool results in generation requests. Decisions are reused within the same session and re-evaluated when the user goal changes. |
 
 - **Codex:** always start it with `jevcomp codex`. To force a compaction and see it work, type `/compact`.
-- **Antigravity:** `jevcomp install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the warning. It needs OpenSSL (`winget install ShiningLight.OpenSSL.Light`). Without the certificate, `jevcomp agy` opens plain Antigravity. `JEVCOMP_CAPTURE=1` saves the requests it sees.
-- **Dashboard:** http://127.0.0.1:43127/ opens with Codex and Claude Code sessions; `jevcomp dashboard` opens it by hand.
+- **Antigravity:** `jevcomp install agy` adds a local certificate so jevcomp can read the conversation with the model (the Google sign-in passes through untouched); on Windows, click **Yes** once in the warning. It needs OpenSSL; jevcomp also discovers the copy bundled with Git for Windows, or you can set `JEVCOMP_OPENSSL` explicitly. Without the certificate, `jevcomp agy` opens plain Antigravity. `JEVCOMP_CAPTURE=1` saves the original requests it sees. Jev only edits unambiguous string tool results; unknown or ambiguous shapes pass through unchanged.
+- **Dashboard:** http://127.0.0.1:43127/ opens with Codex, Claude Code and Antigravity sessions; `jevcomp dashboard` opens it by hand.
 
 ### Claude Code only: as a plugin
 
@@ -108,6 +108,7 @@ Rarely needed; set them as environment variables.
 | `JEVCOMP_MAX_REQUEST_TOKENS` | `30000` | Size of one Jev request. |
 | `JEVCOMP_TRUNCATE_HEAD_CHARS` | `300` | Leading characters kept when an output is shortened. |
 | `JEVCOMP_TRUNCATE_TAIL_CHARS` | `100` | Trailing characters kept when an output is shortened. |
+| `JEVCOMP_AGY_MIN_ELIGIBLE_CHARS` | `2000` | New unjudged Antigravity tool-result characters required before another Jev decision batch. |
 | `JEVCOMP_TIMEOUT_MS` | `20000` | Time limit for one Jev request. |
 | `JEVCOMP_RETRIES` | `1` | Retries after a network failure. |
 | `JEVCOMP_GOAL` | automatic | Task description given to Jev instead of your recent messages. |
