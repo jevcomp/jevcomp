@@ -1,4 +1,4 @@
-import { readFile, readdir, rm } from 'node:fs/promises';
+import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { auditConfig, auditRoot, atomicJson, configureAudit, digest, directoryBytes, readJson, reserveBytes, unpackEvidence, validHash, withAuditLock } from './audit-store.js';
 import { analyzeAudit, auditReport, inspectAuditCase, simulateAudit } from './audit-analysis.js';
@@ -98,6 +98,47 @@ async function pruneAudit(env) {
                 }
             }
         const kept = manifests.filter(manifest => !expired.some(rows => rows.includes(manifest)));
+        const protectedAgyJournals = new Set(kept.flatMap(manifest => manifest.agent === 'agy' && manifest.sessionId
+            ? [resolve(join(root, 'agy-sources', `${digest(manifest.sessionId)}.jsonl`))]
+            : []));
+        const removedAgyJournals = new Set();
+        for (const name of await readdir(join(root, 'agy-sources')).catch(() => [])) {
+            if (!name.endsWith('.jsonl'))
+                continue;
+            const path = safeTarget(root, join(root, 'agy-sources', name));
+            if (protectedAgyJournals.has(resolve(path)))
+                continue;
+            let modifiedAt;
+            try {
+                modifiedAt = (await stat(path)).mtimeMs;
+            }
+            catch {
+                continue;
+            }
+            if (!Number.isFinite(modifiedAt) || modifiedAt >= cutoff)
+                continue;
+            await rm(path, { force: true });
+            removedAgyJournals.add(resolve(path));
+        }
+        let removedAgyBindings = 0;
+        if (removedAgyJournals.size) {
+            for (const name of await readdir(join(root, 'sources')).catch(() => [])) {
+                if (!name.endsWith('.json'))
+                    continue;
+                const bindingPath = safeTarget(root, join(root, 'sources', name));
+                try {
+                    const binding = await readJson(bindingPath);
+                    if (binding.agent !== 'agy' || typeof binding.path !== 'string')
+                        continue;
+                    const target = safeTarget(root, binding.path);
+                    if (!removedAgyJournals.has(resolve(target)))
+                        continue;
+                    await rm(bindingPath, { force: true });
+                    removedAgyBindings++;
+                }
+                catch { }
+            }
+        }
         const referenced = new Set();
         for (const manifest of kept) {
             for (const hash of Object.values(manifest.references))
@@ -123,7 +164,7 @@ async function pruneAudit(env) {
             await rm(safeTarget(root, join(root, 'indexes', name)), { force: true });
         const actualBytes = await directoryBytes(root);
         await atomicJson(join(root, 'budget.json'), { reservedBytes: actualBytes });
-        return { expiredSessions: expired.length, expiredEvaluations: manifests.length - kept.length, removedObjects, keptEvaluations: kept.length, corruptManifests: corrupt, bytes: actualBytes };
+        return { expiredSessions: expired.length, expiredEvaluations: manifests.length - kept.length, removedObjects, removedAgyJournals: removedAgyJournals.size, removedAgyBindings, keptEvaluations: kept.length, corruptManifests: corrupt, bytes: actualBytes };
     });
 }
 export async function auditCommand(args, env = process.env) {

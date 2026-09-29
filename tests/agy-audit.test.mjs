@@ -4,7 +4,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { connect as connectTcp } from 'node:net';
 import { connect as connectTls } from 'node:tls';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendAgyOutbound, createAgyAuditJournalState } from '../dist/agy-audit.js';
@@ -12,7 +12,7 @@ import { ensureAgyCertificate, startAgyProxy } from '../dist/agy-proxy.js';
 import { analyzeAudit, auditReport, simulateAudit } from '../dist/audit-analysis.js';
 import { auditCommand } from '../dist/audit-cli.js';
 import { auditManifests } from '../dist/audit.js';
-import { auditRoot, configureAudit } from '../dist/audit-store.js';
+import { auditRoot, configureAudit, digest } from '../dist/audit-store.js';
 
 async function listen(server) {
   await new Promise((resolve, reject) => {
@@ -340,4 +340,50 @@ test('audit prune removes expired Antigravity-owned continuation journals', asyn
 
   assert.deepEqual(await readdir(join(auditRoot(h.env), 'agy-sources')).catch(() => []), []);
   assert.equal((await auditManifests(h.env)).manifests.length, 0);
+});
+
+test('audit prune removes expired orphan Antigravity journals without manifests', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-agy-audit-orphan-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const env = { JEVCOMP_DATA_DIR: root };
+  await configureAudit(env, 'agy', 'metadata');
+  const state = createAgyAuditJournalState();
+
+  const oldSession = 'orphan-old-session';
+  const recentSession = 'orphan-recent-session';
+  const message = {
+    role: 'assistant',
+    text: 'journal-only outbound',
+    toolCalls: [],
+  };
+  await appendAgyOutbound(env, state, oldSession, [message]);
+  await appendAgyOutbound(env, state, recentSession, [{ ...message, text: 'recent journal-only outbound' }]);
+
+  assert.equal((await auditManifests(env)).manifests.length, 0);
+  const audit = auditRoot(env);
+  const oldJournal = join(audit, 'agy-sources', `${digest(oldSession)}.jsonl`);
+  const recentJournal = join(audit, 'agy-sources', `${digest(recentSession)}.jsonl`);
+  const oldBinding = join(audit, 'sources', `${digest(`agy:${oldSession}:`)}.json`);
+  const recentBinding = join(audit, 'sources', `${digest(`agy:${recentSession}:`)}.json`);
+  await Promise.all([readFile(oldJournal), readFile(recentJournal), readFile(oldBinding), readFile(recentBinding)]);
+
+  const old = new Date('2020-01-01T00:00:00.000Z');
+  await utimes(oldJournal, old, old);
+
+  const lines = [];
+  const originalLog = console.log;
+  console.log = (value) => lines.push(String(value));
+  try {
+    await auditCommand(['prune'], env);
+  } finally {
+    console.log = originalLog;
+  }
+
+  const result = JSON.parse(lines.at(-1));
+  assert.equal(result.removedAgyJournals, 1);
+  assert.equal(result.removedAgyBindings, 1);
+  await assert.rejects(readFile(oldJournal), { code: 'ENOENT' });
+  await assert.rejects(readFile(oldBinding), { code: 'ENOENT' });
+  await readFile(recentJournal);
+  await readFile(recentBinding);
 });
