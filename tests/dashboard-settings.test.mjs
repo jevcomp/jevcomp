@@ -101,7 +101,10 @@ test('dashboard toggles audit per agent and preserves its selected mode while di
   assert.equal(config.agents.codex, 'evidence');
   assert.equal(config.agents.claude, undefined);
   assert.equal(config.modes.claude, 'metadata');
-  assert.equal((await send('agy', { action: 'audit', enabled: true, mode: 'evidence' })).status, 400);
+  response = await send('agy', { action: 'audit', enabled: true, mode: 'evidence' });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).audit, { supported: true, enabled: true, mode: 'evidence' });
+  assert.equal((await auditConfig(env)).agents.agy, 'evidence');
   assert.equal((await send('codex', { action: 'audit', enabled: 'yes', mode: 'evidence' })).status, 400);
 });
 

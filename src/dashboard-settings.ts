@@ -82,9 +82,9 @@ export async function settingsSnapshot(env: Env = process.env, agent: SettingsAg
     },
     dashboardUrl: `http://127.0.0.1:${dashboardPort(env)}/`,
     audit: {
-      supported: agent !== 'agy',
-      enabled: agent === 'agy' ? false : !!audit.agents[agent as AuditAgent],
-      mode: agent === 'agy' ? 'evidence' : audit.agents[agent as AuditAgent] ?? audit.modes?.[agent as AuditAgent] ?? 'evidence',
+      supported: true,
+      enabled: !!audit.agents[agent as AuditAgent],
+      mode: audit.agents[agent as AuditAgent] ?? audit.modes?.[agent as AuditAgent] ?? 'evidence',
     },
     settings: SETTINGS_ITEMS.map((item) => ({
       name: item.name,
@@ -119,7 +119,6 @@ export async function applySettingsChange(body: Record<string, unknown>, env: En
     if (!key) throw new Error('the key is empty');
     await saveProviderConfiguration(provider(body.provider), key, env);
   } else if (body.action === 'audit') {
-    if (agent === 'agy') throw new Error('audit is supported for Codex and Claude Code only');
     if (typeof body.enabled !== 'boolean') throw new Error('enabled must be a boolean');
     const config = await auditConfig(env);
     const mode = body.mode ?? config.agents[agent] ?? config.modes?.[agent] ?? 'evidence';

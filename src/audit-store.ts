@@ -5,7 +5,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import { dataDir } from './store.js';
 import type { Env } from './provider.js';
 
-export type AuditAgent = 'codex' | 'claude';
+export type AuditAgent = 'codex' | 'claude' | 'agy';
 export type AuditMode = 'metadata' | 'evidence';
 export interface AuditConfig {
   schema: 1;
@@ -30,7 +30,7 @@ export async function auditConfig(env: Env): Promise<AuditConfig> {
     const stored = await readJson<AuditConfig>(join(auditRoot(env), 'config.json'));
     if (stored.schema !== 1 || !stored.agents || typeof stored.agents !== 'object') throw Error('invalid audit configuration');
     for (const section of [stored.agents, stored.modes ?? {}]) for (const [agent, mode] of Object.entries(section)) {
-      if ((agent !== 'codex' && agent !== 'claude') || (mode !== 'metadata' && mode !== 'evidence')) throw Error('invalid audit agent or mode');
+      if ((agent !== 'codex' && agent !== 'claude' && agent !== 'agy') || (mode !== 'metadata' && mode !== 'evidence')) throw Error('invalid audit agent or mode');
     }
     for (const key of ['maxBytes', 'retentionDays', 'captureBytes'] as const) {
       if (!Number.isSafeInteger(stored[key]) || stored[key] <= 0) throw Error(`invalid audit ${key}`);

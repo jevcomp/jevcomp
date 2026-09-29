@@ -6,7 +6,7 @@ import { auditManifests } from './audit.js';
 import type { Env } from './provider.js';
 
 function agentName(value: string | undefined): AuditAgent {
-  if (value !== 'codex' && value !== 'claude') throw Error('agent must be codex or claude');
+  if (value !== 'codex' && value !== 'claude' && value !== 'agy') throw Error('agent must be codex, claude or agy');
   return value;
 }
 
@@ -104,7 +104,7 @@ async function pruneAudit(env: Env): Promise<unknown> {
 export async function auditCommand(args: string[], env: Env = process.env): Promise<void> {
   const [command, ...rest] = args;
   if (!command || command === 'help') {
-    console.log('jevcomp audit enable <codex|claude> --mode <metadata|evidence>\njevcomp audit disable <codex|claude>\njevcomp audit configure --max-mib 500 --days 30 --capture-mib 8\njevcomp audit status|report|inspect <case-id>|object <hash>|simulate|review <case-id>|export|prune');
+    console.log('jevcomp audit enable <codex|claude|agy> --mode <metadata|evidence>\njevcomp audit disable <codex|claude|agy>\njevcomp audit configure --max-mib 500 --days 30 --capture-mib 8\njevcomp audit status|report|inspect <case-id>|object <hash>|simulate|review <case-id>|export|prune');
     return;
   }
   if (command === 'enable') {
