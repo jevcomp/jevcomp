@@ -80,7 +80,7 @@ function generationPayload() {
   };
 }
 
-async function harness(t, mode = 'evidence', jevStatus = 200, transportFailure = false) {
+async function harness(t, mode = 'evidence', jevStatus = 200, transportFailure = false, minReductionRatio = '0', answerForKey = () => 0.1) {
   const root = await mkdtemp(join(tmpdir(), 'jev-agy-audit-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   let jevCalls = 0;
@@ -94,7 +94,7 @@ async function harness(t, mode = 'evidence', jevStatus = 200, transportFailure =
       res.end('provider-failure');
       return;
     }
-    const answers = Object.fromEntries(Object.keys(questions).map(key => [key, { noul: 0.1 }]));
+    const answers = Object.fromEntries(Object.keys(questions).map(key => [key, { noul: answerForKey(key) }]));
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ answers, usage: { input_tokens: 123, output_tokens: 4 } }));
   });
@@ -111,7 +111,7 @@ async function harness(t, mode = 'evidence', jevStatus = 200, transportFailure =
     JEV_BASE_URL: `http://127.0.0.1:${jevPort}`,
     JEVCOMP_RETRIES: '0',
     JEVCOMP_PIN_RECENT_MESSAGES: '0',
-    JEVCOMP_MIN_REDUCTION_RATIO: '0',
+    JEVCOMP_MIN_REDUCTION_RATIO: minReductionRatio,
     JEVCOMP_AGY_MIN_ELIGIBLE_CHARS: '0',
   };
   await configureAudit(env, 'agy', mode);
@@ -185,6 +185,36 @@ test('Antigravity audit records the Jev decision, host projection and confirmed 
   const simulation = await simulateAudit(h.env, analysis, 0.5, 0.5);
   assert.equal(simulation.results[0].changes.length, 0);
   assert.equal(simulation.results[0].accepted, true);
+});
+
+test('rejected Antigravity truncate decisions keep their original policy evidence', async (t) => {
+  const h = await harness(
+    t,
+    'evidence',
+    200,
+    false,
+    '0.95',
+    (key) => key.startsWith('drop_') ? 0.9 : 0.1,
+  );
+  const raw = JSON.stringify(generationPayload());
+  assert.match(await postGeneration(h.proxy.url, h.ca, raw), /upstream-ok/);
+  assert.equal(h.jevCalls(), 1);
+  assert.equal(h.forwarded[0], raw);
+
+  const { manifests } = await auditManifests(h.env);
+  assert.equal(manifests.length, 1);
+  assert.equal(manifests[0].stage, 'rejected');
+  assert.equal(manifests[0].reason, 'below_minimum');
+  assert.equal(manifests[0].decisionScope.projections['agy-1'].selected, 'truncate_result');
+  assert.equal(manifests[0].decisionScope.projections['agy-1'].applied, 'keep');
+  assert.ok(manifests[0].decisionScope.projections['agy-1'].selectedSavedChars > 0);
+
+  const analysis = await analyzeAudit(h.env);
+  assert.equal(analysis.cases.length, 1);
+  assert.equal(analysis.cases[0].proposedAction, 'truncate_result');
+  assert.equal(analysis.cases[0].action, 'not_applied');
+  assert.equal(analysis.cases[0].ruleConforms, true);
+  assert.ok(!analysis.cases[0].tags.includes('policy_mismatch'));
 });
 
 test('cached Antigravity decisions do not create another evaluation or false reappearance', async (t) => {

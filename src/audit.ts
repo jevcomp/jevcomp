@@ -20,7 +20,7 @@ export interface AuditManifest {
     evaluated: string[];
     reused: { callId: string; stableKey: string; originAuditId?: string }[];
     stableKeys: Record<string, string>;
-    projections?: Record<string, { selected: string; applied: string }>;
+    projections?: Record<string, { selected: string; applied: string; selectedSavedChars?: number }>;
   };
   wire?: { inputHash: string; outputHash: string; inputBytes: number; outputBytes: number };
   transcript?: string;

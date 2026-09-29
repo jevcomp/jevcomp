@@ -21,6 +21,7 @@ export interface AuditManifest {
         projections?: Record<string, {
             selected: string;
             applied: string;
+            selectedSavedChars?: number;
         }>;
     };
     wire?: {

@@ -495,7 +495,7 @@ export async function compactAgyPayload(
       stableKeys,
       projections: Object.fromEntries(result.decisions.map((decision) => [
         decision.callId,
-        { selected: decision.action, applied: appliedById.get(decision.callId) ?? 'keep' },
+        { selected: decision.action, applied: appliedById.get(decision.callId) ?? 'keep', selectedSavedChars: decision.savedChars },
       ])),
     });
     observeAudit(options.auditObserver, 'output', modelMessages);

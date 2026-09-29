@@ -172,7 +172,10 @@ export async function analyzeAudit(env: Env): Promise<AuditAnalysis> {
     for (const [ordinal, decision] of decisions.entries()) {
       const projection = manifest.agent === 'agy' ? manifest.decisionScope?.projections?.[decision.callId] : undefined;
       const selectedAction = projection?.selected as CallDecision['action'] | undefined ?? decision.action;
-      const selectedDecision = selectedAction === decision.action ? decision : { ...decision, action: selectedAction };
+      const selectedSavedChars = projection?.selectedSavedChars;
+      const selectedDecision = selectedAction === decision.action && selectedSavedChars === undefined
+        ? decision
+        : { ...decision, action: selectedAction, ...(Number.isSafeInteger(selectedSavedChars) && selectedSavedChars! >= 0 ? { savedChars: selectedSavedChars } : {}) };
       const expected = expectedAction(selectedDecision, manifest);
       const observation = await observations(source, manifest, decision, original, event => {
         const key = `${source?.path}:${event.offset}`;

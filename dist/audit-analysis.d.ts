@@ -146,6 +146,7 @@ export declare function inspectAuditCase(env: Env, analysis: AuditAnalysis, id: 
             projections?: Record<string, {
                 selected: string;
                 applied: string;
+                selectedSavedChars?: number;
             }>;
         } | undefined;
         wire: {
