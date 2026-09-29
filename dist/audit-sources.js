@@ -36,7 +36,7 @@ export async function resolveTranscript(env, manifest) {
         return binding.path;
     }
     catch { }
-    if (manifest.agentId)
+    if (manifest.agentId || manifest.agent === 'agy')
         return undefined;
     const root = manifest.agent === 'claude' ? join(env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects') : join(env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions');
     const matches = await findFiles(root, name => manifest.agent === 'claude' ? name === `${manifest.sessionId}.jsonl` : name.endsWith(`-${manifest.sessionId}.jsonl`));
@@ -45,6 +45,25 @@ export async function resolveTranscript(env, manifest) {
 function normalizedEvents(row, manifest, location) {
     const at = typeof row.timestamp === 'string' ? row.timestamp : '';
     const base = { ...location, at };
+    if (manifest.agent === 'agy') {
+        if (row.type !== 'agy_outbound' || row.sessionId !== manifest.sessionId)
+            return [];
+        const scoped = { ...base, evaluationId: typeof row.auditId === 'string' ? row.auditId : undefined };
+        const events = [];
+        if (row.role === 'assistant')
+            events.push({ ...scoped, kind: 'assistant_message', id: row.key, textHashes: Array.isArray(row.textHashes) ? row.textHashes : [] });
+        if (Array.isArray(row.textHashes) && row.textHashes.length)
+            events.push({ ...scoped, kind: 'text', textHashes: row.textHashes });
+        for (const call of Array.isArray(row.calls) ? row.calls : []) {
+            if (call && typeof call === 'object')
+                events.push({ ...scoped, kind: 'call', id: call.id, tool: call.tool, inputHash: call.inputHash });
+        }
+        for (const result of Array.isArray(row.results) ? row.results : []) {
+            if (result && typeof result === 'object')
+                events.push({ ...scoped, kind: 'result', id: result.id, outputHash: result.outputHash, chars: result.chars });
+        }
+        return events;
+    }
     if (manifest.agent === 'claude') {
         if (row.sessionId && row.sessionId !== manifest.sessionId)
             return [];

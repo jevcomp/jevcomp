@@ -14,7 +14,15 @@ export interface AuditManifest {
   agent: AuditAgent;
   sessionId?: string;
   agentId?: string;
-  sessionSource: 'native' | 'unknown';
+  sessionSource: 'native' | 'proxy' | 'unknown';
+  adapterPolicy?: 'agy-preserve-call-result-only-v1';
+  decisionScope?: {
+    evaluated: string[];
+    reused: { callId: string; stableKey: string; originAuditId?: string }[];
+    stableKeys: Record<string, string>;
+    projections?: Record<string, { selected: string; applied: string }>;
+  };
+  wire?: { inputHash: string; outputHash: string; inputBytes: number; outputBytes: number };
   transcript?: string;
   transcriptOffset?: number;
   startedAt: string;
@@ -41,7 +49,7 @@ export interface AuditManifest {
 
 let buildIdentity: Promise<string> | undefined;
 function buildHash(): Promise<string> {
-  return buildIdentity ??= Promise.all(['compact.js', 'provider.js', 'claude.js', 'claude-compact.js', 'codex-proxy.js', 'codex-compaction.js', 'render.js', 'audit.js'].map(async name => {
+  return buildIdentity ??= Promise.all(['compact.js', 'provider.js', 'claude.js', 'claude-compact.js', 'codex-proxy.js', 'codex-compaction.js', 'agy-compact.js', 'agy-proxy.js', 'agy-audit.js', 'render.js', 'audit.js'].map(async name => {
     try { return await readFile(fileURLToPath(new URL(name, import.meta.url)), 'utf8'); }
     catch { return `${name}:unavailable`; }
   })).then(parts => digest(parts.join('\n')));
@@ -72,6 +80,8 @@ export class AuditCapture {
       const hash = digest(encoded);
       this.manifest.hashes[event] = hash;
       if (event === 'settings') this.manifest.settings = { ...this.manifest.settings, ...(value as Record<string, unknown>), goal: undefined };
+      if (event === 'decisionScope') { this.manifest.decisionScope = value as AuditManifest['decisionScope']; return; }
+      if (event === 'wire') { this.manifest.wire = value as AuditManifest['wire']; return; }
       if (event === 'attempt') { if (this.manifest.attempts.length < 1000) this.manifest.attempts.push(value as AuditManifest['attempts'][number]); return; }
       const reference = this.manifest.mode === 'evidence' ? this.graph.pack(value) : undefined;
       if (event === 'questions') this.manifest.batches.push({ questionsHash: hash, questionsRef: reference });
@@ -117,7 +127,7 @@ export class AuditCapture {
   }
 }
 
-export async function beginAudit(env: Env, agent: AuditAgent, id: string, messages: readonly Message[], settings: Record<string, unknown>, sessionId?: string, agentId?: string): Promise<AuditCapture | undefined> {
+export async function beginAudit(env: Env, agent: AuditAgent, id: string, messages: readonly Message[], settings: Record<string, unknown>, sessionId?: string, agentId?: string, extra: Pick<AuditManifest, 'sessionSource' | 'adapterPolicy'> = { sessionSource: sessionId ? 'native' : 'unknown' }): Promise<AuditCapture | undefined> {
   const beginStarted = performance.now();
   try {
     const config = await auditConfig(env), mode = config.agents[agent];
@@ -146,7 +156,7 @@ export async function beginAudit(env: Env, agent: AuditAgent, id: string, messag
       calls.push({ id: call.id, occurrence, inputHash: digest(inputText(call.input)), resultHashes: outputs.map(item => digest(item.output)), resultLengths: outputs.map(item => item.output.length), inputChars: inputText(call.input).length, messageIndex: index, isError: outputs.some(item => !!item.isError) });
     }));
     const manifest: AuditManifest = {
-      schema: 1, id, agent, sessionId, agentId, sessionSource: sessionId ? 'native' : 'unknown', transcript, transcriptOffset,
+      schema: 1, id, agent, sessionId, agentId, sessionSource: extra.sessionSource, adapterPolicy: extra.adapterPolicy, transcript, transcriptOffset,
       startedAt: new Date().toISOString(), mode, version: VERSION, build: await buildHash(), policy: 'conservative-head-tail-v2', stage: 'started',
       settings, hashes: {}, references: {}, batches: [], attempts: [], calls, gaps: [], beginMs: 0, captureMs: 0, observedInputHash: messageHash(messages),
     };
@@ -170,9 +180,14 @@ export async function bindAuditSource(env: Env, agent: AuditAgent, sessionId: st
   try {
     const config = await auditConfig(env);
     if (!config.agents[agent] || !sessionId || !path) return;
+    const bindingPath = join(auditRoot(env), 'sources', `${digest(`${agent}:${sessionId}:${agentId ?? ''}`)}.json`);
+    try {
+      const existing = await readJson<{ agent: AuditAgent; sessionId: string; agentId?: string; path: string }>(bindingPath);
+      if (existing.agent === agent && existing.sessionId === sessionId && existing.agentId === agentId && existing.path === path) return;
+    } catch {}
     await withAuditLock(env, async () => {
       await reserveBytes(env, Buffer.byteLength(path) + 256, config.maxBytes);
-      await atomicJson(join(auditRoot(env), 'sources', `${digest(`${agent}:${sessionId}:${agentId ?? ''}`)}.json`), { agent, sessionId, agentId, path });
+      await atomicJson(bindingPath, { agent, sessionId, agentId, path });
     });
   } catch {}
 }

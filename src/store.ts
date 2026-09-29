@@ -22,6 +22,7 @@ export interface HistoryRow {
   injectedChars?: number;
   injectedPayloadChars?: number;
   retainedChars?: number;
+  auditReuse?: { count: number; originAuditIds: string[] };
 }
 
 /** One folder for every agent, so the Codex and Claude Code plugins share history and the dashboard. */

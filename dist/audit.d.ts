@@ -8,7 +8,27 @@ export interface AuditManifest {
     agent: AuditAgent;
     sessionId?: string;
     agentId?: string;
-    sessionSource: 'native' | 'unknown';
+    sessionSource: 'native' | 'proxy' | 'unknown';
+    adapterPolicy?: 'agy-preserve-call-result-only-v1';
+    decisionScope?: {
+        evaluated: string[];
+        reused: {
+            callId: string;
+            stableKey: string;
+            originAuditId?: string;
+        }[];
+        stableKeys: Record<string, string>;
+        projections?: Record<string, {
+            selected: string;
+            applied: string;
+        }>;
+    };
+    wire?: {
+        inputHash: string;
+        outputHash: string;
+        inputBytes: number;
+        outputBytes: number;
+    };
     transcript?: string;
     transcriptOffset?: number;
     startedAt: string;
@@ -65,7 +85,7 @@ export declare class AuditCapture {
     finish(stage: AuditManifest['stage'], reason: string, historyRecorded: boolean, output?: unknown): Promise<void>;
     private failureMarker;
 }
-export declare function beginAudit(env: Env, agent: AuditAgent, id: string, messages: readonly Message[], settings: Record<string, unknown>, sessionId?: string, agentId?: string): Promise<AuditCapture | undefined>;
+export declare function beginAudit(env: Env, agent: AuditAgent, id: string, messages: readonly Message[], settings: Record<string, unknown>, sessionId?: string, agentId?: string, extra?: Pick<AuditManifest, 'sessionSource' | 'adapterPolicy'>): Promise<AuditCapture | undefined>;
 export declare function bindAuditSource(env: Env, agent: AuditAgent, sessionId: string, path: string, agentId?: string): Promise<void>;
 export declare function auditEvent(env: Env, id: string, event: 'transport_finished', evidence: string): Promise<void>;
 export declare function auditManifests(env: Env): Promise<{

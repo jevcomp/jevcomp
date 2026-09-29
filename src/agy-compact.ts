@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { beginAudit, observeAudit, type AuditCapture, type AuditObserver } from './audit.js';
 import { compact, shortenToolResult, type CompactOptions } from './compact.js';
 import { digest } from './audit-store.js';
 import { JevClient, type JevClientOptions } from './provider.js';
@@ -34,6 +36,7 @@ interface Pair {
 interface SessionPlan {
   contextKey: string;
   actions: Map<string, PlanAction>;
+  origins: Map<string, string>;
   touchedAt: number;
 }
 
@@ -51,11 +54,25 @@ export interface AgyCompactResult {
   stats: CompactStats;
   decisions: CallDecision[];
   reductionRatio: number;
+  modelMessages: Message[];
+  reusedDecisions: { callId: string; stableKey: string; originAuditId?: string }[];
+  audit?: AuditCapture;
+}
+
+export interface AgyAuditStartContext {
+  sessionId: string;
+  messages: Message[];
+  evaluated: { callId: string; stableKey: string }[];
+  reused: { callId: string; stableKey: string; originAuditId?: string }[];
+  stableKeys: Record<string, string>;
+  wireBeforeChars: number;
+  wireFixedChars: number;
 }
 
 export interface AgyCompactOptions extends CompactOptions {
   minReductionRatio?: number;
   minEligibleChars?: number;
+  onProviderStart?: (context: AgyAuditStartContext) => Promise<string | undefined>;
 }
 
 const DEFAULT_MIN_ELIGIBLE_CHARS = 2_000;
@@ -252,6 +269,8 @@ class PlanAsker implements JevAsker {
     private readonly pairsByCandidate: Map<string, Pair>,
     private readonly actions: Map<string, PlanAction>,
     private readonly allowNetwork: boolean,
+    private readonly observer?: AuditObserver,
+    private readonly beforeNetwork?: () => Promise<void>,
   ) {}
 
   async ask(state: Record<string, unknown>, questions: JevQuestions): Promise<JevResponse> {
@@ -273,7 +292,10 @@ class PlanAsker implements JevAsker {
     this.providerAsked = true;
     this.providerRequests++;
     try {
+      await this.beforeNetwork?.();
+      observeAudit(this.observer, 'questions', external);
       const response = await this.delegate.ask(state, external);
+      observeAudit(this.observer, 'response', { questionsHash: digest(JSON.stringify(external)), response });
       return { ...response, answers: { ...answers, ...response.answers } };
     } catch {
       this.providerFailed = true;
@@ -299,6 +321,30 @@ function responseResult(payload: RecordValue, pair: Pair): { body: RecordValue; 
   if (!body) return undefined;
   const value = body[pair.response.resultKey];
   return typeof value === 'string' ? { body, key: pair.response.resultKey, value } : undefined;
+}
+
+function payloadMessages(payload: RecordValue, pairs: readonly Pair[]): Message[] {
+  const contents = contentsOf(payload) ?? [];
+  const pairById = new Map(pairs.map((pair) => [pair.callId, pair]));
+  return toMessages(contents, pairs).map((message) => ({
+    ...message,
+    ...(message.toolResults ? {
+      toolResults: message.toolResults.map((result) => {
+        const pair = pairById.get(result.callId);
+        const value = pair ? responseResult(payload, pair)?.value : undefined;
+        return value === undefined ? result : { ...result, output: value };
+      }),
+    } : {}),
+  }));
+}
+
+export function agyPayloadView(input: unknown): { sessionId: string; messages: Message[] } | undefined {
+  if (!record(input)) return undefined;
+  const contents = contentsOf(input);
+  const sessionId = sessionIdOf(input);
+  if (!contents || !sessionId) return undefined;
+  const pairs = pairRefs(contents, 0);
+  return { sessionId, messages: payloadMessages(input, pairs) };
 }
 
 function applyActions(payload: RecordValue, pairs: readonly Pair[], actions: Map<string, PlanAction>, head: number, tail: number): RecordValue {
@@ -331,7 +377,7 @@ function sessionPlan(state: AgyCompactionState, sessionId: string, nextContext: 
     previous.touchedAt = Date.now();
     return previous;
   }
-  const fresh = { contextKey: nextContext, actions: new Map<string, PlanAction>(), touchedAt: Date.now() };
+  const fresh = { contextKey: nextContext, actions: new Map<string, PlanAction>(), origins: new Map<string, string>(), touchedAt: Date.now() };
   state.sessions.set(sessionId, fresh);
   if (state.sessions.size > MAX_SESSIONS) {
     const oldest = [...state.sessions.entries()].sort((a, b) => a[1].touchedAt - b[1].touchedAt)[0]?.[0];
@@ -365,15 +411,48 @@ export async function compactAgyPayload(
   const allowNetwork = eligibleChars >= minEligible && (plan.actions.size > 0 || potentialRatio >= minimum);
 
   const normalized = toMessages(contents, pairs);
-  const memo = new PlanAsker(asker, candidateMap(pairs), plan.actions, allowNetwork);
-  const result = await compact(normalized, memo, options);
+  const stableKeys = Object.fromEntries(pairs.map((pair) => [pair.callId, pair.fingerprint]));
+  const reused = pairs.filter((pair) => plan.actions.has(pair.fingerprint)).map((pair) => ({
+    callId: pair.callId,
+    stableKey: pair.fingerprint,
+    ...(plan.origins.get(pair.fingerprint) ? { originAuditId: plan.origins.get(pair.fingerprint) } : {}),
+  }));
+  const wireFixedChars = beforeChars - pairs.reduce((sum, pair) => sum + JSON.stringify(pair.response.result).length, 0);
+  let auditId: string | undefined;
+  let auditStarted = false;
+  const beforeNetwork = async () => {
+    if (auditStarted) return;
+    auditStarted = true;
+    try {
+      auditId = await options.onProviderStart?.({
+        sessionId,
+        messages: normalized,
+        evaluated: unplanned.map((pair) => ({ callId: pair.callId, stableKey: pair.fingerprint })),
+        reused,
+        stableKeys,
+        wireBeforeChars: beforeChars,
+        wireFixedChars,
+      });
+    } catch {}
+  };
+  const coreObserver: AuditObserver | undefined = options.auditObserver
+    ? (event, value) => {
+      if (event !== 'questions' && event !== 'response' && event !== 'output') observeAudit(options.auditObserver, event, value);
+    }
+    : undefined;
+  const memo = new PlanAsker(asker, candidateMap(pairs), plan.actions, allowNetwork, options.auditObserver, beforeNetwork);
+  const result = await compact(normalized, memo, { ...options, auditObserver: coreObserver });
 
   const proposedActions = new Map(plan.actions);
+  const proposedOrigins = new Map(plan.origins);
   if (memo.providerAsked && !memo.providerFailed) {
     for (const decision of result.decisions) {
       if (decision.pinned) continue;
       const pair = pairs.find((item) => item.callId === decision.callId);
-      if (pair && !proposedActions.has(pair.fingerprint)) proposedActions.set(pair.fingerprint, decision.action);
+      if (pair && !proposedActions.has(pair.fingerprint)) {
+        proposedActions.set(pair.fingerprint, decision.action);
+        if (auditId) proposedOrigins.set(pair.fingerprint, auditId);
+      }
     }
   }
 
@@ -384,7 +463,10 @@ export async function compactAgyPayload(
   const proposedChars = rawContentsChars(proposed);
   const proposedReduction = beforeChars ? (beforeChars - proposedChars) / beforeChars : 0;
   const acceptedNew = !memo.providerAsked || memo.providerFailed || proposedReduction >= minimum;
-  if (memo.providerAsked && !memo.providerFailed && acceptedNew) plan.actions = proposedActions;
+  if (memo.providerAsked && !memo.providerFailed && acceptedNew) {
+    plan.actions = proposedActions;
+    plan.origins = proposedOrigins;
+  }
 
   const output = memo.providerFailed ? input : memo.providerAsked && !acceptedNew ? baseline : proposed;
   const afterChars = rawContentsChars(output);
@@ -404,6 +486,20 @@ export async function compactAgyPayload(
       savedChars: changed ? current.length - next.length : 0,
     };
   });
+  const modelMessages = payloadMessages(output, pairs);
+  if (memo.providerAsked) {
+    const appliedById = new Map(effectiveDecisions.map((decision) => [decision.callId, decision.action]));
+    observeAudit(options.auditObserver, 'decisionScope', {
+      evaluated: unplanned.map((pair) => pair.callId),
+      reused,
+      stableKeys,
+      projections: Object.fromEntries(result.decisions.map((decision) => [
+        decision.callId,
+        { selected: decision.action, applied: appliedById.get(decision.callId) ?? 'keep' },
+      ])),
+    });
+    observeAudit(options.auditObserver, 'output', modelMessages);
+  }
   const stats: CompactStats = {
     ...result.stats,
     charsBefore: beforeChars,
@@ -423,6 +519,8 @@ export async function compactAgyPayload(
     stats,
     decisions: effectiveDecisions,
     reductionRatio,
+    modelMessages,
+    reusedDecisions: reused,
   };
 }
 export async function compactAgyRequest(
@@ -435,10 +533,44 @@ export async function compactAgyRequest(
   catch { return undefined; }
   const jev = jevCompactOptions(env, 'agy');
   const settings = userSettings(env, 'agy');
-  const asker = new JevClient({ ...jev, cacheStateSerialization: true } as JevClientOptions);
-  return compactAgyPayload(payload, asker, state, {
+  const runId = randomUUID();
+  let audit: AuditCapture | undefined;
+  const pending: Array<[string, unknown]> = [];
+  const auditObserver: AuditObserver = (event, value) => {
+    if (audit) audit.observe(event, value);
+    else if (pending.length < 32) pending.push([event, value]);
+  };
+  const asker = new JevClient({ ...jev, auditObserver, cacheStateSerialization: true } as JevClientOptions);
+  const result = await compactAgyPayload(payload, asker, state, {
     ...jev,
+    auditObserver,
     minReductionRatio: settings.minReductionRatio,
     minEligibleChars: Number(env.JEVCOMP_AGY_MIN_ELIGIBLE_CHARS ?? DEFAULT_MIN_ELIGIBLE_CHARS),
+    onProviderStart: async (context) => {
+      audit = await beginAudit(env, 'agy', runId, context.messages, {
+        minReductionRatio: settings.minReductionRatio,
+        provider: jev.provider,
+        model: jev.model,
+        agyWireBeforeChars: context.wireBeforeChars,
+        agyWireFixedChars: context.wireFixedChars,
+      }, context.sessionId, undefined, {
+        sessionSource: 'proxy',
+        adapterPolicy: 'agy-preserve-call-result-only-v1',
+      });
+      if (!audit) { pending.length = 0; return undefined; }
+      for (const [event, value] of pending.splice(0)) audit.observe(event, value);
+      return audit.manifest.id;
+    },
   });
+  if (!result) return undefined;
+  if (audit) {
+    const outbound = result.changed ? Buffer.from(JSON.stringify(result.payload)) : Buffer.from(body);
+    audit.observe('wire', {
+      inputHash: digest(body),
+      outputHash: digest(outbound),
+      inputBytes: body.byteLength,
+      outputBytes: outbound.byteLength,
+    });
+  }
+  return { ...result, ...(audit ? { audit } : {}) };
 }

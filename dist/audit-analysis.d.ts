@@ -38,6 +38,7 @@ export interface AuditAnalysis {
     cases: AuditCase[];
     sources: Map<string, SourceIndex | undefined>;
     corrupt: string[];
+    agyReuseCount: number;
 }
 export declare function expectedAction(decision: CallDecision, manifest: AuditManifest, dropLimit?: number, truncateLimit?: number): CallDecision['action'] | undefined;
 export declare function analyzeAudit(env: Env): Promise<AuditAnalysis>;
@@ -88,6 +89,12 @@ export declare function auditReport(analysis: AuditAnalysis, seed?: string, limi
     application: {
         [k: string]: number;
     };
+    decisionReuse: {
+        agy: number;
+    };
+    hostProjection: {
+        agy: number;
+    };
     keptExcerptReused: number;
     providerUsage: {
         reportedEvaluations: number;
@@ -119,6 +126,7 @@ export declare function inspectAuditCase(env: Env, analysis: AuditAnalysis, id: 
         id: string;
         agent: import("./audit-store.js").AuditAgent;
         sessionId: string | undefined;
+        sessionSource: "unknown" | "native" | "proxy";
         startedAt: string;
         stage: "failed" | "started" | "evaluated" | "result_produced" | "rejected";
         reason: string | undefined;
@@ -126,6 +134,26 @@ export declare function inspectAuditCase(env: Env, analysis: AuditAnalysis, id: 
         version: string;
         build: string;
         policy: "conservative-prefix-v1" | "conservative-head-tail-v2";
+        adapterPolicy: "agy-preserve-call-result-only-v1" | undefined;
+        decisionScope: {
+            evaluated: string[];
+            reused: {
+                callId: string;
+                stableKey: string;
+                originAuditId?: string;
+            }[];
+            stableKeys: Record<string, string>;
+            projections?: Record<string, {
+                selected: string;
+                applied: string;
+            }>;
+        } | undefined;
+        wire: {
+            inputHash: string;
+            outputHash: string;
+            inputBytes: number;
+            outputBytes: number;
+        } | undefined;
         gaps: string[];
     };
     before: Message[] | undefined;
@@ -176,7 +204,7 @@ export declare function simulateAudit(env: Env, analysis: AuditAnalysis, dropLim
         rejection: string | undefined;
         changes: {
             callId: string;
-            from: import("./types.js").DecisionAction;
+            from: string;
             to: import("./types.js").DecisionAction | undefined;
         }[];
         status?: undefined;

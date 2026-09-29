@@ -4,8 +4,8 @@ import { auditConfig, auditRoot, atomicJson, configureAudit, digest, directoryBy
 import { analyzeAudit, auditReport, inspectAuditCase, simulateAudit } from './audit-analysis.js';
 import { auditManifests } from './audit.js';
 function agentName(value) {
-    if (value !== 'codex' && value !== 'claude')
-        throw Error('agent must be codex or claude');
+    if (value !== 'codex' && value !== 'claude' && value !== 'agy')
+        throw Error('agent must be codex, claude or agy');
     return value;
 }
 function option(args, name, fallback) {
@@ -91,8 +91,11 @@ async function pruneAudit(env) {
                 for (const name of await readdir(join(root, 'reviews')).catch(() => []))
                     if (name.startsWith(`${manifest.id}_`))
                         await rm(safeTarget(root, join(root, 'reviews', name)), { force: true });
-                if (manifest.sessionId)
+                if (manifest.sessionId) {
                     await rm(safeTarget(root, join(root, 'sources', `${digest(`${manifest.agent}:${manifest.sessionId}:${manifest.agentId ?? ''}`)}.json`)), { force: true });
+                    if (manifest.agent === 'agy')
+                        await rm(safeTarget(root, join(root, 'agy-sources', `${digest(manifest.sessionId)}.jsonl`)), { force: true });
+                }
             }
         const kept = manifests.filter(manifest => !expired.some(rows => rows.includes(manifest)));
         const referenced = new Set();
@@ -126,7 +129,7 @@ async function pruneAudit(env) {
 export async function auditCommand(args, env = process.env) {
     const [command, ...rest] = args;
     if (!command || command === 'help') {
-        console.log('jevcomp audit enable <codex|claude> --mode <metadata|evidence>\njevcomp audit disable <codex|claude>\njevcomp audit configure --max-mib 500 --days 30 --capture-mib 8\njevcomp audit status|report|inspect <case-id>|object <hash>|simulate|review <case-id>|export|prune');
+        console.log('jevcomp audit enable <codex|claude|agy> --mode <metadata|evidence>\njevcomp audit disable <codex|claude|agy>\njevcomp audit configure --max-mib 500 --days 30 --capture-mib 8\njevcomp audit status|report|inspect <case-id>|object <hash>|simulate|review <case-id>|export|prune');
         return;
     }
     if (command === 'enable') {

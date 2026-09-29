@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { beginAudit, observeAudit } from './audit.js';
 import { compact, shortenToolResult } from './compact.js';
 import { digest } from './audit-store.js';
 import { JevClient } from './provider.js';
@@ -195,14 +197,18 @@ class PlanAsker {
     pairsByCandidate;
     actions;
     allowNetwork;
+    observer;
+    beforeNetwork;
     providerAsked = false;
     providerFailed = false;
     providerRequests = 0;
-    constructor(delegate, pairsByCandidate, actions, allowNetwork) {
+    constructor(delegate, pairsByCandidate, actions, allowNetwork, observer, beforeNetwork) {
         this.delegate = delegate;
         this.pairsByCandidate = pairsByCandidate;
         this.actions = actions;
         this.allowNetwork = allowNetwork;
+        this.observer = observer;
+        this.beforeNetwork = beforeNetwork;
     }
     async ask(state, questions) {
         const answers = {};
@@ -226,7 +232,10 @@ class PlanAsker {
         this.providerAsked = true;
         this.providerRequests++;
         try {
+            await this.beforeNetwork?.();
+            observeAudit(this.observer, 'questions', external);
             const response = await this.delegate.ask(state, external);
+            observeAudit(this.observer, 'response', { questionsHash: digest(JSON.stringify(external)), response });
             return { ...response, answers: { ...answers, ...response.answers } };
         }
         catch {
@@ -258,6 +267,30 @@ function responseResult(payload, pair) {
     const value = body[pair.response.resultKey];
     return typeof value === 'string' ? { body, key: pair.response.resultKey, value } : undefined;
 }
+function payloadMessages(payload, pairs) {
+    const contents = contentsOf(payload) ?? [];
+    const pairById = new Map(pairs.map((pair) => [pair.callId, pair]));
+    return toMessages(contents, pairs).map((message) => ({
+        ...message,
+        ...(message.toolResults ? {
+            toolResults: message.toolResults.map((result) => {
+                const pair = pairById.get(result.callId);
+                const value = pair ? responseResult(payload, pair)?.value : undefined;
+                return value === undefined ? result : { ...result, output: value };
+            }),
+        } : {}),
+    }));
+}
+export function agyPayloadView(input) {
+    if (!record(input))
+        return undefined;
+    const contents = contentsOf(input);
+    const sessionId = sessionIdOf(input);
+    if (!contents || !sessionId)
+        return undefined;
+    const pairs = pairRefs(contents, 0);
+    return { sessionId, messages: payloadMessages(input, pairs) };
+}
 function applyActions(payload, pairs, actions, head, tail) {
     const out = clonePayload(payload);
     for (const pair of pairs) {
@@ -288,7 +321,7 @@ function sessionPlan(state, sessionId, nextContext) {
         previous.touchedAt = Date.now();
         return previous;
     }
-    const fresh = { contextKey: nextContext, actions: new Map(), touchedAt: Date.now() };
+    const fresh = { contextKey: nextContext, actions: new Map(), origins: new Map(), touchedAt: Date.now() };
     state.sessions.set(sessionId, fresh);
     if (state.sessions.size > MAX_SESSIONS) {
         const oldest = [...state.sessions.entries()].sort((a, b) => a[1].touchedAt - b[1].touchedAt)[0]?.[0];
@@ -317,16 +350,52 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
     const potentialRatio = beforeChars ? eligibleChars / beforeChars : 0;
     const allowNetwork = eligibleChars >= minEligible && (plan.actions.size > 0 || potentialRatio >= minimum);
     const normalized = toMessages(contents, pairs);
-    const memo = new PlanAsker(asker, candidateMap(pairs), plan.actions, allowNetwork);
-    const result = await compact(normalized, memo, options);
+    const stableKeys = Object.fromEntries(pairs.map((pair) => [pair.callId, pair.fingerprint]));
+    const reused = pairs.filter((pair) => plan.actions.has(pair.fingerprint)).map((pair) => ({
+        callId: pair.callId,
+        stableKey: pair.fingerprint,
+        ...(plan.origins.get(pair.fingerprint) ? { originAuditId: plan.origins.get(pair.fingerprint) } : {}),
+    }));
+    const wireFixedChars = beforeChars - pairs.reduce((sum, pair) => sum + JSON.stringify(pair.response.result).length, 0);
+    let auditId;
+    let auditStarted = false;
+    const beforeNetwork = async () => {
+        if (auditStarted)
+            return;
+        auditStarted = true;
+        try {
+            auditId = await options.onProviderStart?.({
+                sessionId,
+                messages: normalized,
+                evaluated: unplanned.map((pair) => ({ callId: pair.callId, stableKey: pair.fingerprint })),
+                reused,
+                stableKeys,
+                wireBeforeChars: beforeChars,
+                wireFixedChars,
+            });
+        }
+        catch { }
+    };
+    const coreObserver = options.auditObserver
+        ? (event, value) => {
+            if (event !== 'questions' && event !== 'response' && event !== 'output')
+                observeAudit(options.auditObserver, event, value);
+        }
+        : undefined;
+    const memo = new PlanAsker(asker, candidateMap(pairs), plan.actions, allowNetwork, options.auditObserver, beforeNetwork);
+    const result = await compact(normalized, memo, { ...options, auditObserver: coreObserver });
     const proposedActions = new Map(plan.actions);
+    const proposedOrigins = new Map(plan.origins);
     if (memo.providerAsked && !memo.providerFailed) {
         for (const decision of result.decisions) {
             if (decision.pinned)
                 continue;
             const pair = pairs.find((item) => item.callId === decision.callId);
-            if (pair && !proposedActions.has(pair.fingerprint))
+            if (pair && !proposedActions.has(pair.fingerprint)) {
                 proposedActions.set(pair.fingerprint, decision.action);
+                if (auditId)
+                    proposedOrigins.set(pair.fingerprint, auditId);
+            }
         }
     }
     const head = Math.max(0, Math.floor(finiteOption(options.truncateHeadChars, 300)));
@@ -336,8 +405,10 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
     const proposedChars = rawContentsChars(proposed);
     const proposedReduction = beforeChars ? (beforeChars - proposedChars) / beforeChars : 0;
     const acceptedNew = !memo.providerAsked || memo.providerFailed || proposedReduction >= minimum;
-    if (memo.providerAsked && !memo.providerFailed && acceptedNew)
+    if (memo.providerAsked && !memo.providerFailed && acceptedNew) {
         plan.actions = proposedActions;
+        plan.origins = proposedOrigins;
+    }
     const output = memo.providerFailed ? input : memo.providerAsked && !acceptedNew ? baseline : proposed;
     const afterChars = rawContentsChars(output);
     const reductionRatio = beforeChars ? (beforeChars - afterChars) / beforeChars : 0;
@@ -356,6 +427,20 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
             savedChars: changed ? current.length - next.length : 0,
         };
     });
+    const modelMessages = payloadMessages(output, pairs);
+    if (memo.providerAsked) {
+        const appliedById = new Map(effectiveDecisions.map((decision) => [decision.callId, decision.action]));
+        observeAudit(options.auditObserver, 'decisionScope', {
+            evaluated: unplanned.map((pair) => pair.callId),
+            reused,
+            stableKeys,
+            projections: Object.fromEntries(result.decisions.map((decision) => [
+                decision.callId,
+                { selected: decision.action, applied: appliedById.get(decision.callId) ?? 'keep' },
+            ])),
+        });
+        observeAudit(options.auditObserver, 'output', modelMessages);
+    }
     const stats = {
         ...result.stats,
         charsBefore: beforeChars,
@@ -375,6 +460,8 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
         stats,
         decisions: effectiveDecisions,
         reductionRatio,
+        modelMessages,
+        reusedDecisions: reused,
     };
 }
 export async function compactAgyRequest(body, env, state) {
@@ -387,10 +474,51 @@ export async function compactAgyRequest(body, env, state) {
     }
     const jev = jevCompactOptions(env, 'agy');
     const settings = userSettings(env, 'agy');
-    const asker = new JevClient({ ...jev, cacheStateSerialization: true });
-    return compactAgyPayload(payload, asker, state, {
+    const runId = randomUUID();
+    let audit;
+    const pending = [];
+    const auditObserver = (event, value) => {
+        if (audit)
+            audit.observe(event, value);
+        else if (pending.length < 32)
+            pending.push([event, value]);
+    };
+    const asker = new JevClient({ ...jev, auditObserver, cacheStateSerialization: true });
+    const result = await compactAgyPayload(payload, asker, state, {
         ...jev,
+        auditObserver,
         minReductionRatio: settings.minReductionRatio,
         minEligibleChars: Number(env.JEVCOMP_AGY_MIN_ELIGIBLE_CHARS ?? DEFAULT_MIN_ELIGIBLE_CHARS),
+        onProviderStart: async (context) => {
+            audit = await beginAudit(env, 'agy', runId, context.messages, {
+                minReductionRatio: settings.minReductionRatio,
+                provider: jev.provider,
+                model: jev.model,
+                agyWireBeforeChars: context.wireBeforeChars,
+                agyWireFixedChars: context.wireFixedChars,
+            }, context.sessionId, undefined, {
+                sessionSource: 'proxy',
+                adapterPolicy: 'agy-preserve-call-result-only-v1',
+            });
+            if (!audit) {
+                pending.length = 0;
+                return undefined;
+            }
+            for (const [event, value] of pending.splice(0))
+                audit.observe(event, value);
+            return audit.manifest.id;
+        },
     });
+    if (!result)
+        return undefined;
+    if (audit) {
+        const outbound = result.changed ? Buffer.from(JSON.stringify(result.payload)) : Buffer.from(body);
+        audit.observe('wire', {
+            inputHash: digest(body),
+            outputHash: digest(outbound),
+            inputBytes: body.byteLength,
+            outputBytes: outbound.byteLength,
+        });
+    }
+    return { ...result, ...(audit ? { audit } : {}) };
 }

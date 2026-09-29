@@ -5,10 +5,13 @@ import { createServer as createTlsServer } from 'node:tls';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { auditEvent } from './audit.js';
+import { appendAgyOutbound, createAgyAuditJournalState } from './agy-audit.js';
 import { captureDirectory, tryAppendHistory } from './store.js';
-import { compactAgyRequest, createAgyCompactionState } from './agy-compact.js';
+import { agyPayloadView, compactAgyRequest, createAgyCompactionState } from './agy-compact.js';
 import { launch } from './command.js';
 import { randomUUID } from 'node:crypto';
+import type { Message } from './types.js';
 
 const CA_NAME = 'jevcomp Antigravity local CA';
 const BODY_INTEGRITY_HEADERS = ['content-md5', 'content-digest', 'digest', 'x-goog-content-sha256'] as const;
@@ -110,6 +113,7 @@ export async function uninstallAgyCa(): Promise<void> {
 export async function startAgyProxy(env = process.env, options: { tunnelHost?: string; tunnelPort?: number; upstreamHost?: string; upstreamPort?: number; upstreamCa?: Uint8Array } = {}): Promise<{ url: string; close: () => Promise<void> }> {
   const { directory } = await ensureAgyCertificate(env);
   const compactionState = createAgyCompactionState();
+  const auditJournalState = createAgyAuditJournalState();
   const key = await readFile(join(directory, 'server.key'));
   const cert = await readFile(join(directory, 'server.crt'));
   const http = createHttpServer((req: any, res: any) => {
@@ -120,6 +124,8 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks);
       let outbound = body;
+      let transportAuditId: string | undefined;
+      let outboundAudit: { sessionId: string; messages: Message[]; auditId?: string } | undefined;
       const isGeneration = req.method === 'POST' && req.url?.split('?')[0] === '/v1internal:streamGenerateContent';
       const bodyIntegrityProtected = BODY_INTEGRITY_HEADERS.some((name) => req.headers[name] !== undefined);
       if (isGeneration) {
@@ -129,27 +135,37 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
           const compacted = bodyIntegrityProtected ? undefined : await compactAgyRequest(body, env, compactionState);
           if (compacted) {
             if (compacted.changed) outbound = Buffer.from(JSON.stringify(compacted.payload));
+            let historyRecorded = false;
             if (compacted.providerAsked || compacted.changed) {
-              const runId = randomUUID();
+              const runId = compacted.audit?.manifest.id ?? randomUUID();
               const base = {
                 at: new Date().toISOString(),
                 runId,
+                ...(compacted.audit ? { auditId: compacted.audit.manifest.id } : {}),
                 sessionId: compacted.sessionId,
                 model: typeof compacted.payload.model === 'string' ? compacted.payload.model : undefined,
                 host: 'agy' as const,
                 phase: 'precompact' as const,
               };
               const status = compacted.providerFailed ? 'failed' as const : compacted.changed ? 'prepared' as const : 'skipped' as const;
-              await tryAppendHistory({
+              historyRecorded = await tryAppendHistory({
                 ...base,
                 status,
                 stats: compacted.stats,
                 decisions: compacted.decisions,
+                ...(compacted.reusedDecisions.length ? {
+                  auditReuse: {
+                    count: compacted.reusedDecisions.length,
+                    originAuditIds: [...new Set(compacted.reusedDecisions.flatMap((item) => item.originAuditId ? [item.originAuditId] : []))],
+                  },
+                } : {}),
                 retainedChars: compacted.changed ? compacted.stats.charsAfter : undefined,
                 detail: compacted.providerFailed
                   ? 'Jev failed; Antigravity request forwarded unchanged'
                   : compacted.planUpdated
-                    ? `Antigravity request reduced by ${Math.round(compacted.reductionRatio * 100)}%`
+                    ? compacted.changed
+                      ? `Antigravity request reduced by ${Math.round(compacted.reductionRatio * 100)}%`
+                      : 'Antigravity Jev plan accepted; request unchanged'
                     : compacted.changed
                       ? `Antigravity request reduced by ${Math.round(compacted.reductionRatio * 100)}% using cached decisions`
                       : 'Antigravity reduction below minimum; new decisions were not applied',
@@ -170,8 +186,27 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
                 }, env);
               }
             }
+            if (compacted.audit) {
+              if (compacted.providerFailed) await compacted.audit.finish('failed', 'provider_failed', historyRecorded);
+              else if (!compacted.planUpdated) await compacted.audit.finish('rejected', 'below_minimum', historyRecorded);
+              else {
+                await compacted.audit.finish('result_produced', 'agy_request_prepared', historyRecorded, compacted.modelMessages);
+                transportAuditId = compacted.audit.manifest.id;
+              }
+            }
+            outboundAudit = {
+              sessionId: compacted.sessionId,
+              messages: compacted.modelMessages,
+              ...(transportAuditId ? { auditId: transportAuditId } : {}),
+            };
           }
         } catch {}
+        if (!outboundAudit) {
+          try {
+            const visible = agyPayloadView(JSON.parse(outbound.toString('utf8')));
+            if (visible) outboundAudit = visible;
+          } catch {}
+        }
       }
       const forwardHeaders = outbound === body ? req.headers : { ...req.headers, 'content-length': String(outbound.length) };
       if (outbound !== body) delete forwardHeaders['transfer-encoding'];
@@ -179,6 +214,8 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
         const forward = request({ hostname: options.upstreamHost ?? hostname, servername: hostname, port: options.upstreamPort ?? 443, ca: options.upstreamCa, method: req.method, path: req.url, headers: forwardHeaders }, resolve);
         forward.once('error', reject); forward.end(outbound);
       }));
+      if (outboundAudit) await appendAgyOutbound(env, auditJournalState, outboundAudit.sessionId, outboundAudit.messages, outboundAudit.auditId);
+      if (transportAuditId) await auditEvent(env, transportAuditId, 'transport_finished', 'Antigravity upstream response headers received after forwarding the compacted request');
       res.writeHead(upstream.statusCode, upstream.headers);
       upstream.pipe(res);
     })().catch(() => { if (!res.headersSent) res.writeHead(502); res.end(); });

@@ -12,6 +12,7 @@ export interface SourceEvent {
     outputHash?: string;
     chars?: number;
     textHashes?: string[];
+    evaluationId?: string;
     encrypted?: boolean;
 }
 export interface SourceIndex {

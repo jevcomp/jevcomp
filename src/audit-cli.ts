@@ -79,7 +79,10 @@ async function pruneAudit(env: Env): Promise<unknown> {
       await rm(safeTarget(root, join(root, 'evaluations', `${manifest.id}.json`)), { force: true });
       await rm(safeTarget(root, join(root, 'events', `${manifest.id}.json`)), { force: true });
       for (const name of await readdir(join(root, 'reviews')).catch(() => [])) if (name.startsWith(`${manifest.id}_`)) await rm(safeTarget(root, join(root, 'reviews', name)), { force: true });
-      if (manifest.sessionId) await rm(safeTarget(root, join(root, 'sources', `${digest(`${manifest.agent}:${manifest.sessionId}:${manifest.agentId ?? ''}`)}.json`)), { force: true });
+      if (manifest.sessionId) {
+        await rm(safeTarget(root, join(root, 'sources', `${digest(`${manifest.agent}:${manifest.sessionId}:${manifest.agentId ?? ''}`)}.json`)), { force: true });
+        if (manifest.agent === 'agy') await rm(safeTarget(root, join(root, 'agy-sources', `${digest(manifest.sessionId)}.jsonl`)), { force: true });
+      }
     }
     const kept = manifests.filter(manifest => !expired.some(rows => rows.includes(manifest)));
     const referenced = new Set<string>();

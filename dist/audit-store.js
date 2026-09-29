@@ -18,7 +18,7 @@ export async function auditConfig(env) {
             throw Error('invalid audit configuration');
         for (const section of [stored.agents, stored.modes ?? {}])
             for (const [agent, mode] of Object.entries(section)) {
-                if ((agent !== 'codex' && agent !== 'claude') || (mode !== 'metadata' && mode !== 'evidence'))
+                if ((agent !== 'codex' && agent !== 'claude' && agent !== 'agy') || (mode !== 'metadata' && mode !== 'evidence'))
                     throw Error('invalid audit agent or mode');
             }
         for (const key of ['maxBytes', 'retentionDays', 'captureBytes']) {

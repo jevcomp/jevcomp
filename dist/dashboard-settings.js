@@ -64,9 +64,9 @@ export async function settingsSnapshot(env = process.env, agent = 'codex') {
         },
         dashboardUrl: `http://127.0.0.1:${dashboardPort(env)}/`,
         audit: {
-            supported: agent !== 'agy',
-            enabled: agent === 'agy' ? false : !!audit.agents[agent],
-            mode: agent === 'agy' ? 'evidence' : audit.agents[agent] ?? audit.modes?.[agent] ?? 'evidence',
+            supported: true,
+            enabled: !!audit.agents[agent],
+            mode: audit.agents[agent] ?? audit.modes?.[agent] ?? 'evidence',
         },
         settings: SETTINGS_ITEMS.map((item) => ({
             name: item.name,
@@ -108,8 +108,6 @@ export async function applySettingsChange(body, env, agent) {
         await saveProviderConfiguration(provider(body.provider), key, env);
     }
     else if (body.action === 'audit') {
-        if (agent === 'agy')
-            throw new Error('audit is supported for Codex and Claude Code only');
         if (typeof body.enabled !== 'boolean')
             throw new Error('enabled must be a boolean');
         const config = await auditConfig(env);

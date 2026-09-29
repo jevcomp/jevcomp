@@ -8,7 +8,7 @@ import type { AuditManifest } from './audit.js';
 export interface SourceEvent {
   offset: number; length: number; hash: string; at: string; kind: string;
   id?: string; tool?: string; inputHash?: string; outputHash?: string;
-  chars?: number; textHashes?: string[];
+  chars?: number; textHashes?: string[]; evaluationId?: string;
   encrypted?: boolean;
 }
 export interface SourceIndex {
@@ -45,7 +45,7 @@ export async function resolveTranscript(env: Env, manifest: AuditManifest): Prom
     const binding = await readJson<{ path: string }>(join(auditRoot(env), 'sources', `${digest(`${manifest.agent}:${manifest.sessionId}:${manifest.agentId ?? ''}`)}.json`));
     return binding.path;
   } catch {}
-  if (manifest.agentId) return undefined;
+  if (manifest.agentId || manifest.agent === 'agy') return undefined;
   const root = manifest.agent === 'claude' ? join(env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects') : join(env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions');
   const matches = await findFiles(root, name => manifest.agent === 'claude' ? name === `${manifest.sessionId}.jsonl` : name.endsWith(`-${manifest.sessionId}.jsonl`));
   return matches.length === 1 ? matches[0] : undefined;
@@ -54,6 +54,20 @@ export async function resolveTranscript(env: Env, manifest: AuditManifest): Prom
 function normalizedEvents(row: any, manifest: AuditManifest, location: Pick<SourceEvent, 'offset' | 'length' | 'hash'>): SourceEvent[] {
   const at = typeof row.timestamp === 'string' ? row.timestamp : '';
   const base = { ...location, at };
+  if (manifest.agent === 'agy') {
+    if (row.type !== 'agy_outbound' || row.sessionId !== manifest.sessionId) return [];
+    const scoped = { ...base, evaluationId: typeof row.auditId === 'string' ? row.auditId : undefined };
+    const events: SourceEvent[] = [];
+    if (row.role === 'assistant') events.push({ ...scoped, kind: 'assistant_message', id: row.key, textHashes: Array.isArray(row.textHashes) ? row.textHashes : [] });
+    if (Array.isArray(row.textHashes) && row.textHashes.length) events.push({ ...scoped, kind: 'text', textHashes: row.textHashes });
+    for (const call of Array.isArray(row.calls) ? row.calls : []) {
+      if (call && typeof call === 'object') events.push({ ...scoped, kind: 'call', id: call.id, tool: call.tool, inputHash: call.inputHash });
+    }
+    for (const result of Array.isArray(row.results) ? row.results : []) {
+      if (result && typeof result === 'object') events.push({ ...scoped, kind: 'result', id: result.id, outputHash: result.outputHash, chars: result.chars });
+    }
+    return events;
+  }
   if (manifest.agent === 'claude') {
     if (row.sessionId && row.sessionId !== manifest.sessionId) return [];
     if (row.subtype === 'compact_boundary') return [{ ...base, kind: 'boundary' }];

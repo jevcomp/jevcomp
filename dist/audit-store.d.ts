@@ -1,5 +1,5 @@
 import type { Env } from './provider.js';
-export type AuditAgent = 'codex' | 'claude';
+export type AuditAgent = 'codex' | 'claude' | 'agy';
 export type AuditMode = 'metadata' | 'evidence';
 export interface AuditConfig {
     schema: 1;
