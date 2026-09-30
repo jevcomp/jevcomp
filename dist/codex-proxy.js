@@ -194,8 +194,6 @@ async function localCompaction(body, env) {
     const payload = request;
     const items = payload.input;
     const messages = [];
-    for (const item of items.slice(0, -1))
-        appendResponseItem(messages, item);
     const runId = randomUUID();
     const metadata = record(payload.client_metadata) ? payload.client_metadata : {};
     const canonicalMetadata = codexTurnMetadata(payload) ?? {};
@@ -203,13 +201,18 @@ async function localCompaction(body, env) {
         ?? metadataString(metadata, 'session_id') ?? metadataString(metadata, 'thread_id');
     const jev = jevCompactOptions(env, 'codex');
     const minimum = userSettings(env, 'codex').minReductionRatio;
-    const audit = await beginAudit(env, 'codex', runId, messages, { minReductionRatio: minimum, provider: jev.provider, model: jev.model, maxSummaryTokens: MAX_COMPACTION_SUMMARY_TOKENS }, sessionId);
+    let audit;
     const localRun = {
-        at: new Date().toISOString(), runId, ...(audit ? { auditId: runId } : {}), sessionId: sessionId ?? runId,
+        at: new Date().toISOString(), runId, auditId: undefined, sessionId: sessionId ?? runId,
         turnId: metadataString(canonicalMetadata, 'turn_id') ?? metadataString(metadata, 'turn_id'), model: typeof payload.model === 'string' ? payload.model : undefined,
         provider: jev.provider, host: 'codex', phase: 'precompact',
     };
     try {
+        for (const item of items.slice(0, -1))
+            appendResponseItem(messages, item);
+        audit = await beginAudit(env, 'codex', runId, messages, { minReductionRatio: minimum, provider: jev.provider, model: jev.model, maxSummaryTokens: MAX_COMPACTION_SUMMARY_TOKENS }, sessionId);
+        if (audit)
+            localRun.auditId = runId;
         if (messages.length < 2) {
             const recorded = await tryAppendHistory({ ...localRun, status: 'skipped', detail: 'conversation too short' }, env);
             await audit?.finish('rejected', 'conversation_too_short', recorded);

@@ -408,6 +408,9 @@ test('fails open for compact requests that throw, produce no text, or exceed the
   const finalPrompt = structuredClone(compactionFixture.input.at(-1));
   const cases = [
     {
+      input: [...compactionFixture.input.slice(0, -1), { type: 'custom_tool_call_output', call_id: 'image', output: [{ type: 'input_image', image_url: 'data:image/png;base64,test' }] }, finalPrompt],
+    },
+    {
       input: [...compactionFixture.input.slice(0, -1), { type: 'image_generation_call' }, finalPrompt],
     },
     {
@@ -432,4 +435,10 @@ test('fails open for compact requests that throw, produce no text, or exceed the
   }
 
   assert.deepEqual(receivedBodies, cases);
+  const history = (await readFile(join(codexHome, 'jev-data', 'history.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(history[0].status, 'failed');
+  assert.equal(history[0].phase, 'precompact');
+  assert.match(history[0].detail, /non-text tool output/);
+  assert.equal(history[1].status, 'failed');
+  assert.match(history[1].detail, /image generation/);
 });
