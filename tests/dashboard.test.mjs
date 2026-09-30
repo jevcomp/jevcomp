@@ -78,12 +78,23 @@ test('dashboard reports measured impact without invented token-savings estimates
   assert.equal(s.byTool[0].tool, 'grep');
   assert.equal(s.byTool[0].removedChars, 4100); // prepared-only run is not presented as realized tool reduction
   assert.equal('estimatedPrunedTokens' in s, false);
-  assert.equal(s.lastCompaction.at, runId);
-  assert.equal(s.lastCompaction.status, 'restored');
-  assert.equal(s.lastCompaction.injectedPayloadChars, 1800);
+  assert.equal(s.lastCompaction.at, '2026-09-22T12:02:30.000Z');
+  assert.equal(s.lastCompaction.status, 'prepared');
+  assert.equal(s.lastCompaction.injectedPayloadChars, 0);
   assert.deepEqual(s.lastCompaction.blocks.map((b) => [b.decision, b.chars, b.label]), [['r', 4100, 'q=x'], ['s', 2250, 'a.ts'], ['k', 1010, 'test']]);
   assert.deepEqual(s.runStatusCounts, { prepared: 1, restored: 1, skipped: 1, failed: 1 });
   assert.equal(s.recentDecisions[0].decision, 'k');
+
+  await appendHistory({ at: '2026-09-30T12:00:00Z', runId: 'new-skip', sessionId: 's6', host: 'codex', phase: 'precompact', status: 'skipped', stats: compactStats, detail: 'below_minimum' }, env);
+  const skipped = await stats(env, 'codex');
+  assert.equal(skipped.lastCompaction.at, '2026-09-30T12:00:00Z');
+  assert.equal(skipped.lastCompaction.status, 'skipped');
+  await appendHistory({ at: '2026-09-30T12:01:00Z', runId: 'new-fail', sessionId: 's7', host: 'codex', phase: 'precompact', status: 'failed', detail: 'non-text tool output cannot be judged by Jev' }, env);
+  const failed = await stats(env, 'codex');
+  assert.equal(failed.lastCompaction.at, '2026-09-30T12:01:00Z');
+  assert.equal(failed.lastCompaction.status, 'failed');
+  assert.match(failed.lastCompaction.detail, /non-text tool output/);
+  assert.equal(failed.completedCharsRemoved, s.completedCharsRemoved);
 
   const dashboard = await startDashboard(0, env);
   t.after(() => dashboard.server.close());
@@ -103,7 +114,7 @@ test('dashboard reports measured impact without invented token-savings estimates
   // Dashboard caches parsed history while the file is unchanged, but an append must invalidate it.
   await appendHistory({ at: '2026-09-22T12:03:00.000Z', runId: 'fail-2', sessionId: 's4', phase: 'precompact', status: 'failed', detail: 'transcript unavailable' }, env);
   const refreshed = await fetch(`${dashboard.url}api/stats`).then((r) => r.json());
-  assert.equal(refreshed.nativeFallbacks, 2);
+  assert.equal(refreshed.nativeFallbacks, 3);
 });
 
 test('dashboard cache invalidates when persisted settings change without new history', async () => {

@@ -41,6 +41,7 @@ interface LastCompaction {
     at: string;
     host: 'codex' | 'claude' | 'agy';
     status: RunSummary['status'];
+    detail?: string;
     charsBefore: number;
     injectedPayloadChars: number;
     returnedChars: number;

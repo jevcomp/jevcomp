@@ -174,11 +174,12 @@ export async function stats(env = process.env, agent) {
     for (const run of runs)
         runStatusCounts[run.status] = (runStatusCounts[run.status] ?? 0) + 1;
     const newestOf = (rows) => rows.reduce((last, row) => !last || row.at > last.at ? row : last, undefined);
-    const latest = newestOf(prepared.filter((row) => restoredRunKeys.has(runKey(row)))) ?? newestOf(prepared);
+    const latest = newestOf([...prepared, ...skipped, ...precompactFailures]);
     const lastCompaction = latest ? {
         at: latest.at,
         host: latest.host ?? 'codex',
         status: runs.find((run) => run.runId === runKey(latest))?.status ?? 'prepared',
+        detail: latest.detail,
         charsBefore: positive(latest.stats?.charsBefore),
         injectedPayloadChars: positive(restoresByRun.get(runKey(latest))?.injectedPayloadChars),
         returnedChars: positive(restoresByRun.get(runKey(latest))?.retainedChars),
