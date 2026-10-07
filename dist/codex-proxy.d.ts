@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 export { isCodexCompactionRequest } from './codex-compaction.js';
 type AuthRoute = 'chatgpt' | 'api';
 type Destinations = Record<AuthRoute, string>;
-export declare function startCodexProxy(env?: Record<string, string | undefined>, upstreams?: Destinations): Promise<{
+export declare function startCodexProxy(env?: Record<string, string | undefined>, configuredUpstreams?: Destinations): Promise<{
     baseUrl: string;
     close: () => Promise<void>;
 }>;

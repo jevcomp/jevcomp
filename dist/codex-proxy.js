@@ -39,6 +39,25 @@ async function authRoute(env) {
         return 'chatgpt';
     return auth.tokens && !auth.OPENAI_API_KEY ? 'chatgpt' : 'api';
 }
+/** Another tool (e.g. a local ChatGPT bridge) may own `openai_base_url`; bypassing it breaks its custom models. */
+async function configuredDestinations(env) {
+    const codexHome = env.CODEX_HOME?.trim() || join(homedir(), '.codex');
+    let config;
+    try {
+        config = await readFile(join(codexHome, 'config.toml'), 'utf8');
+    }
+    catch {
+        return destinations;
+    }
+    for (const line of config.split(/\r?\n/)) {
+        if (/^\s*\[/.test(line))
+            break;
+        const match = /^\s*openai_base_url\s*=\s*(["'])(.+?)\1\s*(?:#.*)?$/.exec(line);
+        if (match?.[2])
+            return { chatgpt: match[2], api: match[2] };
+    }
+    return destinations;
+}
 function routeForRequest(headers, fallback) {
     const accountId = headers['chatgpt-account-id'];
     return accountId && (!Array.isArray(accountId) || accountId.length > 0) ? 'chatgpt' : fallback;
@@ -241,8 +260,9 @@ async function localCompaction(body, env) {
         throw error;
     }
 }
-export async function startCodexProxy(env = process.env, upstreams = destinations) {
+export async function startCodexProxy(env = process.env, configuredUpstreams) {
     const fallbackRoute = await authRoute(env);
+    const upstreams = configuredUpstreams ?? await configuredDestinations(env);
     const pendingAuditEvents = new Set();
     const server = createServer((request, response) => {
         void (async () => {

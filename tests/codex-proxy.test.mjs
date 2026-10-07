@@ -442,3 +442,23 @@ test('fails open for compact requests that throw, produce no text, or exceed the
   assert.equal(history[1].status, 'failed');
   assert.match(history[1].detail, /image generation/);
 });
+
+test('a bridge set as openai_base_url in config.toml receives the forwarded traffic', async (t) => {
+  let receivedUrl;
+  const bridge = createServer(async (request, response) => {
+    receivedUrl = request.url;
+    await collect(request);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end('{}');
+  });
+  const bridgeUrl = await listen(bridge);
+  t.after(() => close(bridge));
+  const codexHome = await makeCodexHome({ auth_mode: 'chatgpt', tokens: { account_id: 'a' } });
+  await writeFile(join(codexHome, 'config.toml'), `model = "bridge/model"\nopenai_base_url = "${bridgeUrl}/v1" # managed\n[model_providers.other]\nopenai_base_url = "http://wrong"\n`);
+  const proxy = await startCodexProxy({ CODEX_HOME: codexHome });
+  t.after(async () => { await proxy.close(); await rm(codexHome, { recursive: true, force: true }); });
+
+  const response = await fetch(`${proxy.baseUrl}/responses`, { method: 'POST', headers: { 'chatgpt-account-id': 'a' }, body: JSON.stringify({ input: [] }) });
+  assert.equal(response.status, 200);
+  assert.equal(receivedUrl, '/v1/responses');
+});
