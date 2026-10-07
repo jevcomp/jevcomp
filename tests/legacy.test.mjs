@@ -20,7 +20,7 @@ test('history recorded by the old plugin stays visible', async () => {
   const oldData = join(root, 'plugins', 'data', 'jev-compact-jev-compact');
   await mkdir(oldData, { recursive: true });
   await writeFile(join(oldData, 'history.jsonl'), `${JSON.stringify({ at: '2026-09-24T00:00:00.000Z', sessionId: 'old', status: 'ready', runId: 'r1' })}\n`);
-  const rows = await readHistory({ CODEX_HOME: root, PLUGIN_DATA: join(root, 'plugins', 'data', 'jevcomp-jevcomp') });
+  const rows = await readHistory({ JEVCOMP_HISTORY_DAYS: '3650', CODEX_HOME: root, PLUGIN_DATA: join(root, 'plugins', 'data', 'jevcomp-jevcomp') });
   assert.ok(rows.some((row) => row.sessionId === 'old'));
 });
 

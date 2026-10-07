@@ -12,7 +12,7 @@ import { auditConfig } from '../dist/audit-store.js';
 
 async function dashboard(t, extra = {}) {
   const root = await mkdtemp(join(tmpdir(), 'jevcomp-dash-settings-'));
-  const env = { JEVCOMP_DATA_DIR: join(root, 'data'), JEVCOMP_CONFIG_DIR: join(root, 'config'), JEVCOMP_AGY_HOME: join(root, 'agy-ca'), CODEX_HOME: join(root, 'codex'), CLAUDE_CONFIG_DIR: join(root, 'claude'), ...extra };
+  const env = { JEVCOMP_HISTORY_DAYS: '3650', JEVCOMP_DATA_DIR: join(root, 'data'), JEVCOMP_CONFIG_DIR: join(root, 'config'), JEVCOMP_AGY_HOME: join(root, 'agy-ca'), CODEX_HOME: join(root, 'codex'), CLAUDE_CONFIG_DIR: join(root, 'claude'), ...extra };
   const { server, url } = await startDashboard(0, env);
   t.after(() => server.close());
   const html = await fetch(url).then((response) => response.text());

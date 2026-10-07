@@ -30,4 +30,5 @@ export declare function historyPath(env?: Record<string, string | undefined>): s
 export declare function readableHistoryPaths(env?: Record<string, string | undefined>): string[];
 export declare function appendHistory(row: HistoryRow, env?: Record<string, string | undefined>): Promise<void>;
 export declare function tryAppendHistory(row: HistoryRow, env?: Record<string, string | undefined>): Promise<boolean>;
+export declare function historyRetentionDays(env?: Record<string, string | undefined>): number;
 export declare function readHistory(env?: Record<string, string | undefined>): Promise<HistoryRow[]>;

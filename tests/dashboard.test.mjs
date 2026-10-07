@@ -19,7 +19,7 @@ const decisions = [
 ];
 
 test('Codex proxy compaction displays returned text even without a legacy injection', async () => {
-  const env = { JEVCOMP_DATA_DIR: await mkdtemp(join(tmpdir(), 'jev-dashboard-proxy-')) };
+  const env = { JEVCOMP_HISTORY_DAYS: '3650', JEVCOMP_DATA_DIR: await mkdtemp(join(tmpdir(), 'jev-dashboard-proxy-')) };
   const row = { at: '2026-09-26T12:00:00Z', runId: 'proxy', sessionId: 'proxy', host: 'codex', stats: compactStats, retainedChars: 3900, decisions };
   await appendHistory({ ...row, phase: 'precompact', status: 'prepared' }, env);
   await appendHistory({ ...row, phase: 'postcompact', status: 'restored', injectedPayloadChars: 0, injectedChars: 0 }, env);
@@ -40,7 +40,7 @@ test('Codex proxy compaction displays returned text even without a legacy inject
 });
 
 test('Antigravity proxy reductions are counted as direct compactions', async () => {
-  const env = { JEVCOMP_DATA_DIR: await mkdtemp(join(tmpdir(), 'jev-dashboard-agy-')) };
+  const env = { JEVCOMP_HISTORY_DAYS: '3650', JEVCOMP_DATA_DIR: await mkdtemp(join(tmpdir(), 'jev-dashboard-agy-')) };
   const row = { at: '2026-09-27T12:00:00Z', runId: 'agy', sessionId: 'agy-session', host: 'agy', stats: compactStats, retainedChars: 4000, decisions };
   await appendHistory({ ...row, phase: 'precompact', status: 'prepared' }, env);
   await appendHistory({ ...row, phase: 'postcompact', status: 'restored', injectedPayloadChars: 0, injectedChars: 0 }, env);
@@ -53,7 +53,7 @@ test('Antigravity proxy reductions are counted as direct compactions', async () 
 
 test('dashboard reports measured impact without invented token-savings estimates', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'jev-dashboard-'));
-  const env = { JEVCOMP_DATA_DIR: root, JEVCOMP_CONFIG_DIR: join(root, 'config') };
+  const env = { JEVCOMP_HISTORY_DAYS: '3650', JEVCOMP_DATA_DIR: root, JEVCOMP_CONFIG_DIR: join(root, 'config') };
   const runId = '2026-09-22T12:00:00.000Z';
   await appendHistory({ at: runId, runId, sessionId: 's1', phase: 'precompact', status: 'prepared', provider: 'typesafe', stats: compactStats, decisions, retainedChars: 4300 }, env);
   await appendHistory({ at: '2026-09-22T12:00:01.000Z', runId, sessionId: 's1', phase: 'restore', status: 'restored', stats: compactStats, restoreMode: 'balanced', retainedChars: 4300, injectedPayloadChars: 1800, injectedChars: 2100 }, env);
@@ -124,7 +124,7 @@ test('dashboard cache invalidates when persisted settings change without new his
   const { startDashboard } = await import('../dist/dashboard.js');
   const { setUserSetting } = await import('../dist/settings.js');
   const root = await mkdtemp(join(tmpdir(), 'jev-dashboard-settings-'));
-  const env = { JEVCOMP_DATA_DIR: join(root, 'data'), JEVCOMP_CONFIG_DIR: join(root, 'config') };
+  const env = { JEVCOMP_HISTORY_DAYS: '3650', JEVCOMP_DATA_DIR: join(root, 'data'), JEVCOMP_CONFIG_DIR: join(root, 'config') };
   const { server, url } = await startDashboard(0, env);
   try {
     const before = await fetch(`${url}api/stats`).then((response) => response.json());
@@ -138,7 +138,7 @@ test('dashboard cache invalidates when persisted settings change without new his
 
 test('runs with nothing to send or a too-short conversation get their own status', async () => {
   const root = await mkdtemp(join(tmpdir(), 'jev-dashboard-status-'));
-  const env = { JEVCOMP_DATA_DIR: root };
+  const env = { JEVCOMP_HISTORY_DAYS: '3650', JEVCOMP_DATA_DIR: root };
   const runId = '2026-09-25T10:00:00.000Z';
   await appendHistory({ at: runId, runId, sessionId: 'n1', phase: 'precompact', status: 'prepared', stats: compactStats, decisions }, env);
   await appendHistory({ at: '2026-09-25T10:00:05.000Z', runId, sessionId: 'n1', phase: 'restore', status: 'restored', stats: compactStats, injectedPayloadChars: 0, injectedChars: 0 }, env);
@@ -150,7 +150,7 @@ test('runs with nothing to send or a too-short conversation get their own status
 
 test('last compaction names each block by its command, even from a cut preview', async () => {
   const root = await mkdtemp(join(tmpdir(), 'jev-dashboard-label-'));
-  const env = { JEVCOMP_DATA_DIR: root };
+  const env = { JEVCOMP_HISTORY_DAYS: '3650', JEVCOMP_DATA_DIR: root };
   const block = (name, inputPreview) => ({ id: name, callId: name, name, inputPreview, dropLoss: 0.1, truncateLoss: 0.1, action: 'keep', resultChars: 10, originalChars: 10, savedChars: 0, pinned: false });
   await appendHistory({ at: '2026-09-22T12:00:00.000Z', runId: 'r', sessionId: 's', phase: 'precompact', status: 'prepared', stats: compactStats, decisions: [
     block('exec_command', '{"cmd":"git diff -- src \\"a b\\"","workdir":"C:\\x'),
