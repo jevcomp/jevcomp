@@ -6,6 +6,7 @@ export interface ClaudeUsageRow {
     path: string;
     statusCode: number;
     durationMs: number;
+    sessionId?: string;
     inputTokens?: number;
     cacheCreationInputTokens?: number;
     cacheReadInputTokens?: number;

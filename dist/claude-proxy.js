@@ -2,10 +2,13 @@ import { spawn } from 'node:child_process';
 import { createServer, request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { StringDecoder } from 'node:string_decoder';
-import { appendFile, mkdir } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { dataDir } from './store.js';
 import { launch } from './command.js';
+import { recordUsage } from './experiment.js';
 function positiveInt(value) {
     return Number.isInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 }
@@ -85,6 +88,10 @@ async function appendUsage(row, env) {
     }
     catch { }
 }
+/** Older Claude Code builds only send the session inside `metadata.user_id`, near the end of the request body. */
+function sessionFromMetadata(tail) {
+    return /session[_\\"]*(?:id)?[\\":\s]*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(tail)?.[1];
+}
 function forwardHeaders(headers) {
     const out = { ...headers };
     const connectionTokens = typeof headers.connection === 'string'
@@ -108,6 +115,22 @@ function upstreamUrl(base, incoming) {
 }
 function envEnabled(value) {
     return !!value?.trim() && !/^(?:0|false|no|off)$/i.test(value.trim());
+}
+/**
+ * A settings file's `env` beats the process environment in Claude Code, so a base URL set there would silently
+ * bypass the gateway; it becomes the gateway's upstream and a `--settings` file points Claude back at the gateway.
+ */
+async function settingsBaseUrl(env) {
+    const home = env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+    for (const path of [join(process.cwd(), '.claude', 'settings.local.json'), join(process.cwd(), '.claude', 'settings.json'), join(home, 'settings.json')]) {
+        try {
+            const value = JSON.parse(await readFile(path, 'utf8'))?.env?.ANTHROPIC_BASE_URL;
+            if (typeof value === 'string' && value.trim())
+                return value.trim();
+        }
+        catch { }
+    }
+    return undefined;
 }
 export function claudeProxyUnsupportedReason(env) {
     if (envEnabled(env.CLAUDE_CODE_USE_BEDROCK) || env.ANTHROPIC_BEDROCK_BASE_URL)
@@ -135,6 +158,11 @@ export async function startClaudeProxy(env = process.env) {
     const server = createServer((req, res) => {
         const started = Date.now();
         const target = upstreamUrl(base, req.url ?? '/');
+        const headerSession = req.headers['x-claude-code-session-id'];
+        let sessionId = typeof headerSession === 'string' && headerSession ? headerSession : undefined;
+        let bodyTail = '';
+        if (!sessionId)
+            req.on('data', (chunk) => { bodyTail = (bodyTail + Buffer.from(chunk).toString('latin1')).slice(-16_384); });
         const forward = requestFn(target, { method: req.method, headers: forwardHeaders(req.headers) }, (upstream) => {
             const tap = new SseUsageTap();
             const contentType = String(upstream.headers['content-type'] ?? '').toLowerCase();
@@ -168,10 +196,20 @@ export async function startClaudeProxy(env = process.env) {
                     }
                     catch { }
                 }
+                sessionId ??= sessionFromMetadata(bodyTail);
+                if (tap.usage.inputTokens !== undefined || tap.usage.outputTokens !== undefined) {
+                    void recordUsage(env, 'claude', sessionId, {
+                        input: tap.usage.inputTokens ?? 0,
+                        cached: tap.usage.cacheReadInputTokens ?? 0,
+                        cacheWrite: tap.usage.cacheCreationInputTokens ?? 0,
+                        output: tap.usage.outputTokens ?? 0,
+                    }, tap.model);
+                }
                 void appendUsage({
                     at: new Date().toISOString(),
                     model: tap.model,
                     path: target.pathname,
+                    ...(sessionId ? { sessionId } : {}),
                     statusCode: upstream.statusCode ?? 0,
                     durationMs: Date.now() - started,
                     ...tap.usage,
@@ -215,9 +253,10 @@ export async function runClaude(args, env = process.env, options = {}) {
     catch { }
     let proxy;
     const unsupported = claudeProxyUnsupportedReason(env);
+    const configuredBase = await settingsBaseUrl(env);
     if (!unsupported) {
         try {
-            proxy = await (options.startProxy ?? startClaudeProxy)(env);
+            proxy = await (options.startProxy ?? startClaudeProxy)(configuredBase ? { ...env, ANTHROPIC_BASE_URL: configuredBase } : env);
         }
         catch (error) {
             console.error(`jevcomp Claude gateway is off (${error instanceof Error ? error.message : String(error)}); starting plain Claude Code.`);
@@ -227,8 +266,15 @@ export async function runClaude(args, env = process.env, options = {}) {
         console.error(`jevcomp Claude gateway is off (${unsupported}); starting Claude Code with the compaction hook only.`);
     }
     const childEnv = proxy ? { ...env, ANTHROPIC_BASE_URL: proxy.baseUrl } : env;
+    let override;
     try {
-        const child = launch('claude', args, { env: childEnv, stdio: 'inherit', windowsHide: true }, options.spawn ?? spawn);
+        if (proxy && configuredBase) {
+            override = join(dataDir(env), `claude-gateway-${randomUUID()}.json`);
+            await mkdir(dataDir(env), { recursive: true, mode: 0o700 });
+            await writeFile(override, JSON.stringify({ env: { ANTHROPIC_BASE_URL: proxy.baseUrl } }), { mode: 0o600 });
+        }
+        const childArgs = override ? ['--settings', override, ...args] : args;
+        const child = launch('claude', childArgs, { env: childEnv, stdio: 'inherit', windowsHide: true }, options.spawn ?? spawn);
         return await new Promise((resolve, reject) => {
             child.once('error', reject);
             child.once('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
@@ -236,5 +282,7 @@ export async function runClaude(args, env = process.env, options = {}) {
     }
     finally {
         await proxy?.close();
+        if (override)
+            await rm(override, { force: true }).catch(() => { });
     }
 }

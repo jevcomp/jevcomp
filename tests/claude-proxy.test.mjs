@@ -71,7 +71,7 @@ test('Claude gateway wrapper preserves args and only replaces ANTHROPIC_BASE_URL
   const child = new EventEmitter();
   let spawned;
   let closed = false;
-  const env = { ANTHROPIC_BASE_URL: 'https://gateway.example/anthropic', KEEP_ME: 'yes' };
+  const env = { ANTHROPIC_BASE_URL: 'https://gateway.example/anthropic', KEEP_ME: 'yes', CLAUDE_CONFIG_DIR: join(tmpdir(), 'jev-no-claude-settings') };
   const exit = runClaude(['--model', 'sonnet'], env, {
     startProxy: async () => ({ baseUrl: 'http://127.0.0.1:43210', upstream: env.ANTHROPIC_BASE_URL, close: async () => { closed = true; } }),
     spawn: (name, args, options) => {
