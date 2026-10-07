@@ -359,3 +359,61 @@ test('agy starts without the proxy when its certificate is not installed', async
   assert.equal(status, 0);
   assert.equal(env.HTTPS_PROXY, undefined);
 });
+
+test('a failing Jev records its reason and no decision list in history', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-agy-jev-fails-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const jev = createHttpServer((_req, res) => {
+    res.writeHead(402, { 'content-type': 'application/json' });
+    res.end('{"error":{"message":"Insufficient credits"}}');
+  });
+  const jevPort = await listen(jev);
+  t.after(() => new Promise(resolve => jev.close(resolve)));
+  const env = {
+    ...process.env,
+    JEVCOMP_AGY_HOME: join(root, 'ca'),
+    JEVCOMP_DATA_DIR: join(root, 'data'),
+    JEVCOMP_CONFIG_DIR: join(root, 'config'),
+    JEVCOMP_PROVIDER: 'typesafe',
+    TYPESAFE_API_KEY: 'test',
+    JEV_BASE_URL: `http://127.0.0.1:${jevPort}`,
+    JEVCOMP_RETRIES: '0',
+    JEVCOMP_PIN_RECENT_MESSAGES: '0',
+    JEVCOMP_MIN_REDUCTION_RATIO: '0',
+    JEVCOMP_AGY_MIN_ELIGIBLE_CHARS: '0',
+  };
+  const certs = await ensureAgyCertificate(env);
+  const ca = await readFile(join(certs.directory, 'ca.crt'));
+  const key = await readFile(join(certs.directory, 'server.key'));
+  const cert = await readFile(join(certs.directory, 'server.crt'));
+  let receivedBody = '';
+  const upstream = createHttpsServer({ key, cert }, async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    receivedBody = Buffer.concat(chunks).toString();
+    res.end('upstream-ok');
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => new Promise(resolve => upstream.close(resolve)));
+  const proxy = await startAgyProxy(env, { upstreamHost: '127.0.0.1', upstreamPort, upstreamCa: ca });
+  t.after(() => proxy.close());
+
+  const raw = JSON.stringify({
+    model: 'gemini-test',
+    request: {
+      sessionId: 'failing-session',
+      contents: [
+        { role: 'user', parts: [{ text: 'task' }] },
+        { role: 'model', parts: [{ functionCall: { id: 'c1', name: 'shell', args: { command: 'test' } } }] },
+        { role: 'user', parts: [{ functionResponse: { id: 'c1', name: 'shell', response: { result: 'x'.repeat(8000) } } }] },
+        { role: 'model', parts: [{ text: 'continue' }] },
+      ],
+    },
+  });
+  assert.match(await postGeneration(proxy.url, ca, raw), /upstream-ok/);
+  assert.equal(receivedBody, raw);
+  const [row] = (await readFile(join(root, 'data', 'history.jsonl'), 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(row.status, 'failed');
+  assert.match(row.detail, /402.*Insufficient credits/);
+  assert.equal(row.decisions, undefined);
+});

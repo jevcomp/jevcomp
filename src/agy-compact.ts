@@ -49,6 +49,7 @@ export interface AgyCompactResult {
   changed: boolean;
   providerAsked: boolean;
   providerFailed: boolean;
+  providerError?: string;
   planUpdated: boolean;
   sessionId: string;
   stats: CompactStats;
@@ -262,6 +263,7 @@ function plannedAnswer(action: PlanAction, kind: 'drop' | 'truncate'): number {
 class PlanAsker implements JevAsker {
   providerAsked = false;
   providerFailed = false;
+  providerError?: string;
   providerRequests = 0;
 
   constructor(
@@ -297,8 +299,9 @@ class PlanAsker implements JevAsker {
       const response = await this.delegate.ask(state, external);
       observeAudit(this.observer, 'response', { questionsHash: digest(JSON.stringify(external)), response });
       return { ...response, answers: { ...answers, ...response.answers } };
-    } catch {
+    } catch (error) {
       this.providerFailed = true;
+      this.providerError = error instanceof Error ? error.message : String(error);
       for (const key of Object.keys(external)) answers[key] = { noul: 1 };
       return { answers };
     }
@@ -514,6 +517,7 @@ export async function compactAgyPayload(
     changed: afterChars < beforeChars,
     providerAsked: memo.providerAsked,
     providerFailed: memo.providerFailed,
+    ...(memo.providerError ? { providerError: memo.providerError } : {}),
     planUpdated: memo.providerAsked && !memo.providerFailed && acceptedNew,
     sessionId,
     stats,

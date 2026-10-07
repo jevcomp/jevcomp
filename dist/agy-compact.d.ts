@@ -17,6 +17,7 @@ export interface AgyCompactResult {
     changed: boolean;
     providerAsked: boolean;
     providerFailed: boolean;
+    providerError?: string;
     planUpdated: boolean;
     sessionId: string;
     stats: CompactStats;

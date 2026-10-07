@@ -201,6 +201,7 @@ class PlanAsker {
     beforeNetwork;
     providerAsked = false;
     providerFailed = false;
+    providerError;
     providerRequests = 0;
     constructor(delegate, pairsByCandidate, actions, allowNetwork, observer, beforeNetwork) {
         this.delegate = delegate;
@@ -238,8 +239,9 @@ class PlanAsker {
             observeAudit(this.observer, 'response', { questionsHash: digest(JSON.stringify(external)), response });
             return { ...response, answers: { ...answers, ...response.answers } };
         }
-        catch {
+        catch (error) {
             this.providerFailed = true;
+            this.providerError = error instanceof Error ? error.message : String(error);
             for (const key of Object.keys(external))
                 answers[key] = { noul: 1 };
             return { answers };
@@ -455,6 +457,7 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
         changed: afterChars < beforeChars,
         providerAsked: memo.providerAsked,
         providerFailed: memo.providerFailed,
+        ...(memo.providerError ? { providerError: memo.providerError } : {}),
         planUpdated: memo.providerAsked && !memo.providerFailed && acceptedNew,
         sessionId,
         stats,

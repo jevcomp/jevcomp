@@ -152,7 +152,7 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
                 ...base,
                 status,
                 stats: compacted.stats,
-                decisions: compacted.decisions,
+                ...(compacted.providerFailed ? {} : { decisions: compacted.decisions }),
                 ...(compacted.reusedDecisions.length ? {
                   auditReuse: {
                     count: compacted.reusedDecisions.length,
@@ -161,7 +161,7 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
                 } : {}),
                 retainedChars: compacted.changed ? compacted.stats.charsAfter : undefined,
                 detail: compacted.providerFailed
-                  ? 'Jev failed; Antigravity request forwarded unchanged'
+                  ? `Jev failed; Antigravity request forwarded unchanged${compacted.providerError ? ` (${compacted.providerError.slice(0, 240)})` : ''}`
                   : compacted.planUpdated
                     ? compacted.changed
                       ? `Antigravity request reduced by ${Math.round(compacted.reductionRatio * 100)}%`
