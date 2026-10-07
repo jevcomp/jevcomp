@@ -9,7 +9,7 @@ import { resetUserSettings, setUserSetting, settingOverride, userSettings } from
 import { readHistory } from './store.js';
 import { VERSION } from './version.js';
 import { agyCaInstalled, agyCertificateThumbprint } from './agy-proxy.js';
-import { auditConfig, configureAudit } from './audit-store.js';
+import { experimentProgress, startExperiment, stopExperiment } from './experiment.js';
 const agyDetection = new Map();
 async function antigravityInstalled(env) {
     const key = env.JEVCOMP_AGY_HOME ?? join(homedir(), '.jevcomp', 'agy-ca');
@@ -43,7 +43,7 @@ export async function settingsSnapshot(env = process.env, agent = 'codex') {
     const codexInstalled = existsSync(codexMarker);
     const claude = await claudeInstallation(env);
     const agyInstalled = await antigravityInstalled(env);
-    const audit = await auditConfig(env);
+    const measurement = await experimentProgress(env, agent);
     const lastJev = [...history].reverse().find((row) => row.phase === 'precompact' || (!row.phase && row.status === 'failed'));
     const settingValue = {
         'pin-recent-messages': String(settings.pinRecentMessages),
@@ -63,11 +63,7 @@ export async function settingsSnapshot(env = process.env, agent = 'codex') {
             agy: { installed: agyInstalled },
         },
         dashboardUrl: `http://127.0.0.1:${dashboardPort(env)}/`,
-        audit: {
-            supported: true,
-            enabled: !!audit.agents[agent],
-            mode: audit.agents[agent] ?? audit.modes?.[agent] ?? 'evidence',
-        },
+        measurement,
         settings: SETTINGS_ITEMS.map((item) => ({
             name: item.name,
             value: settingValue[item.name],
@@ -107,14 +103,13 @@ export async function applySettingsChange(body, env, agent) {
             throw new Error('the key is empty');
         await saveProviderConfiguration(provider(body.provider), key, env);
     }
-    else if (body.action === 'audit') {
+    else if (body.action === 'measure') {
         if (typeof body.enabled !== 'boolean')
             throw new Error('enabled must be a boolean');
-        const config = await auditConfig(env);
-        const mode = body.mode ?? config.agents[agent] ?? config.modes?.[agent] ?? 'evidence';
-        if (mode !== 'evidence' && mode !== 'metadata')
-            throw new Error('audit mode must be evidence or metadata');
-        await configureAudit(env, agent, mode, body.enabled);
+        if (body.enabled)
+            await startExperiment(env, agent);
+        else
+            await stopExperiment(env, agent);
     }
     else {
         throw new Error('unknown action');

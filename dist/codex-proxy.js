@@ -10,6 +10,7 @@ import { compactMessages, estimateTokens } from './compact.js';
 import { codexCompactionReductionRatio, codexTurnMetadata, isCodexCompactionRequest, renderCodexCompactionSummary } from './codex-compaction.js';
 import { jevCompactOptions } from './hooks.js';
 export { isCodexCompactionRequest } from './codex-compaction.js';
+import { activeRun, assignArm, recordJevTokens, recordUsage, sseTap } from './experiment.js';
 import { appendResponseItem } from './rollout.js';
 import { userSettings } from './settings.js';
 import { captureDirectory, tryAppendHistory } from './store.js';
@@ -117,7 +118,7 @@ function waitForDrain(response) {
         response.once('error', finish);
     });
 }
-async function streamResponse(upstream, response) {
+async function streamResponse(upstream, response, tap) {
     response.statusCode = upstream.status;
     if (upstream.statusText)
         response.statusMessage = upstream.statusText;
@@ -133,6 +134,7 @@ async function streamResponse(upstream, response) {
             const chunk = await reader.read();
             if (chunk.done)
                 break;
+            tap?.push(chunk.value);
             if (response.destroyed) {
                 await reader.cancel();
                 return;
@@ -145,6 +147,7 @@ async function streamResponse(upstream, response) {
                 }
             }
         }
+        tap?.end();
         response.end();
     }
     finally {
@@ -206,6 +209,22 @@ function metadataString(metadata, key) {
     const value = metadata[key];
     return typeof value === 'string' && value.trim() ? value : undefined;
 }
+function codexSessionId(payload) {
+    const metadata = record(payload.client_metadata) ? payload.client_metadata : {};
+    const canonical = codexTurnMetadata(payload) ?? {};
+    return metadataString(canonical, 'session_id') ?? metadataString(canonical, 'thread_id')
+        ?? metadataString(metadata, 'session_id') ?? metadataString(metadata, 'thread_id');
+}
+function codexUsage(value) {
+    if (!record(value) || value.type !== 'response.completed' || !record(value.response) || !record(value.response.usage))
+        return undefined;
+    const usage = value.response.usage;
+    const total = Number(usage.input_tokens), output = Number(usage.output_tokens);
+    const cached = Number(record(usage.input_tokens_details) ? usage.input_tokens_details.cached_tokens : 0) || 0;
+    if (!Number.isFinite(total) || !Number.isFinite(output))
+        return undefined;
+    return { input: Math.max(0, total - cached), cached, cacheWrite: 0, output };
+}
 async function localCompaction(body, env) {
     const request = JSON.parse(Buffer.from(body).toString('utf8'));
     if (!isCodexCompactionRequest(request))
@@ -216,8 +235,7 @@ async function localCompaction(body, env) {
     const runId = randomUUID();
     const metadata = record(payload.client_metadata) ? payload.client_metadata : {};
     const canonicalMetadata = codexTurnMetadata(payload) ?? {};
-    const sessionId = metadataString(canonicalMetadata, 'session_id') ?? metadataString(canonicalMetadata, 'thread_id')
-        ?? metadataString(metadata, 'session_id') ?? metadataString(metadata, 'thread_id');
+    const sessionId = codexSessionId(payload);
     const jev = jevCompactOptions(env, 'codex');
     const minimum = userSettings(env, 'codex').minReductionRatio;
     let audit;
@@ -226,6 +244,11 @@ async function localCompaction(body, env) {
         turnId: metadataString(canonicalMetadata, 'turn_id') ?? metadataString(metadata, 'turn_id'), model: typeof payload.model === 'string' ? payload.model : undefined,
         provider: jev.provider, host: 'codex', phase: 'precompact',
     };
+    const measured = await assignArm(env, 'codex', localRun.sessionId);
+    if (measured?.arm === 'native') {
+        await tryAppendHistory({ ...localRun, status: 'skipped', detail: 'gain measurement: this compaction was left to Codex' }, env);
+        return undefined;
+    }
     try {
         for (const item of items.slice(0, -1))
             appendResponseItem(messages, item);
@@ -238,6 +261,7 @@ async function localCompaction(body, env) {
             return undefined;
         }
         const result = await compactMessages(messages, { ...jev, auditObserver: audit?.observe });
+        await recordJevTokens(env, 'codex', measured?.unitId, result.stats.jevInputTokens, result.stats.jevOutputTokens);
         const belowMinimum = codexCompactionReductionRatio(messages, result.messages) < minimum;
         const summary = belowMinimum ? '' : renderCodexCompactionSummary(result.messages);
         const outputTokens = belowMinimum ? 0 : estimateTokens(summary);
@@ -268,6 +292,14 @@ export async function startCodexProxy(env = process.env, configuredUpstreams) {
         void (async () => {
             const body = await requestBody(request);
             const { path, search } = requestPath(request.url ?? '/');
+            let measuredTurn;
+            if (request.method === 'POST' && path === '/responses' && await activeRun(env, 'codex')) {
+                try {
+                    const payload = JSON.parse(Buffer.from(body).toString('utf8'));
+                    measuredTurn = { sessionId: codexSessionId(payload), model: typeof payload.model === 'string' ? payload.model : undefined, compaction: isCodexCompactionRequest(payload) };
+                }
+                catch { }
+            }
             if (request.method === 'POST' && path === '/responses') {
                 try {
                     await captureBody(env, body);
@@ -311,7 +343,16 @@ export async function startCodexProxy(env = process.env, configuredUpstreams) {
                     redirect: 'manual',
                     signal: controller.signal,
                 });
-                await streamResponse(upstream, response);
+                let usage;
+                const tap = measuredTurn?.sessionId ? sseTap((event) => { usage = codexUsage(event) ?? usage; }) : undefined;
+                // Codex may hang up right after `response.completed`, which aborts the stream before it ends normally.
+                try {
+                    await streamResponse(upstream, response, tap);
+                }
+                finally {
+                    if (tap && measuredTurn)
+                        await recordUsage(env, 'codex', measuredTurn.sessionId, usage, measuredTurn.model, measuredTurn.compaction);
+                }
             }
             catch {
                 sendFailure(response, 502, 'Upstream request failed');

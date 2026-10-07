@@ -9,8 +9,10 @@ import { auditEvent } from './audit.js';
 import { appendAgyOutbound, createAgyAuditJournalState } from './agy-audit.js';
 import { captureDirectory, tryAppendHistory } from './store.js';
 import { agyPayloadView, compactAgyRequest, createAgyCompactionState } from './agy-compact.js';
+import { activeRun, assignArm, recordJevTokens, recordUsage, sseTap } from './experiment.js';
 import { launch } from './command.js';
 import { randomUUID } from 'node:crypto';
+import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 const CA_NAME = 'jevcomp Antigravity local CA';
 const BODY_INTEGRITY_HEADERS = ['content-md5', 'content-digest', 'digest', 'x-goog-content-sha256'];
 export const AGY_HOSTS = ['cloudcode-pa.googleapis.com', 'daily-cloudcode-pa.googleapis.com'];
@@ -115,9 +117,51 @@ export async function uninstallAgyCa() {
     }
     execFileSync('certutil.exe', ['-user', '-delstore', 'Root', CA_NAME], { stdio: 'ignore', windowsHide: false });
 }
+/**
+ * `request.sessionId` is shared by every conversation of one Antigravity install, so it cannot tell conversations apart.
+ * Requests without a conversation (its own checkpoint summaries) stay out of the measurement.
+ */
+function agyConversationId(payload) {
+    const labels = payload?.request?.labels;
+    const id = labels?.root_cascade_id ?? labels?.cascade_id;
+    return typeof id === 'string' && id ? id : undefined;
+}
+function agyUsage(value) {
+    const event = value && typeof value === 'object' ? value : undefined;
+    const usage = event?.response?.usageMetadata ?? event?.usageMetadata;
+    if (!usage || typeof usage !== 'object')
+        return undefined;
+    const prompt = Number(usage.promptTokenCount) || 0, cached = Number(usage.cachedContentTokenCount) || 0;
+    return { input: Math.max(0, prompt - cached), cached, cacheWrite: 0, output: (Number(usage.candidatesTokenCount) || 0) + (Number(usage.thoughtsTokenCount) || 0) };
+}
+/** Each streamed chunk repeats the running usage, so the last one seen is the request's total. */
+function tapAgyUsage(upstream, done) {
+    const encoding = String(upstream.headers['content-encoding'] ?? '').toLowerCase();
+    let source = upstream;
+    try {
+        if (encoding === 'gzip')
+            source = upstream.pipe(createGunzip());
+        else if (encoding === 'br')
+            source = upstream.pipe(createBrotliDecompress());
+        else if (encoding === 'deflate')
+            source = upstream.pipe(createInflate());
+        else if (encoding && encoding !== 'identity')
+            return;
+    }
+    catch {
+        return;
+    }
+    let usage;
+    const tap = sseTap((event) => { usage = agyUsage(event) ?? usage; });
+    source.on('data', (chunk) => tap.push(chunk));
+    source.once('error', () => { });
+    source.once('end', () => { tap.end(); if (usage)
+        void done(usage); });
+}
 export async function startAgyProxy(env = process.env, options = {}) {
     const { directory } = await ensureAgyCertificate(env);
     const compactionState = createAgyCompactionState();
+    const measuredArms = new Map();
     const auditJournalState = createAgyAuditJournalState();
     const key = await readFile(join(directory, 'server.key'));
     const cert = await readFile(join(directory, 'server.crt'));
@@ -137,6 +181,7 @@ export async function startAgyProxy(env = process.env, options = {}) {
             let transportAuditId;
             let outboundAudit;
             const isGeneration = req.method === 'POST' && req.url?.split('?')[0] === '/v1internal:streamGenerateContent';
+            let measuredSession;
             const bodyIntegrityProtected = BODY_INTEGRITY_HEADERS.some((name) => req.headers[name] !== undefined);
             if (isGeneration) {
                 const directory = captureDirectory(env, 'agy-capture');
@@ -146,8 +191,24 @@ export async function startAgyProxy(env = process.env, options = {}) {
                         await writeFile(join(directory, `${Date.now()}-${randomUUID()}.bin`), body, { mode: 0o600, flag: 'wx' });
                     }
                     catch { }
+                let measured;
+                const runId = await activeRun(env, 'agy');
+                if (runId) {
+                    try {
+                        measuredSession = agyConversationId(JSON.parse(body.toString('utf8')));
+                        if (measuredSession) {
+                            const key = `${runId}:${measuredSession}`;
+                            measured = measuredArms.get(key) ?? await assignArm(env, 'agy', measuredSession);
+                            if (measured)
+                                measuredArms.set(key, measured);
+                        }
+                    }
+                    catch { }
+                }
                 try {
-                    const compacted = bodyIntegrityProtected ? undefined : await compactAgyRequest(body, env, compactionState);
+                    const compacted = bodyIntegrityProtected || measured?.arm === 'native' ? undefined : await compactAgyRequest(body, env, compactionState);
+                    if (compacted?.providerAsked)
+                        await recordJevTokens(env, 'agy', measured?.unitId, compacted.stats.jevInputTokens, compacted.stats.jevOutputTokens);
                     if (compacted) {
                         if (compacted.changed)
                             outbound = Buffer.from(JSON.stringify(compacted.payload));
@@ -242,6 +303,8 @@ export async function startAgyProxy(env = process.env, options = {}) {
             if (transportAuditId)
                 await auditEvent(env, transportAuditId, 'transport_finished', 'Antigravity upstream response headers received after forwarding the compacted request');
             res.writeHead(upstream.statusCode, upstream.headers);
+            if (measuredSession)
+                tapAgyUsage(upstream, (usage) => recordUsage(env, 'agy', measuredSession, usage));
             upstream.pipe(res);
         })().catch(() => { if (!res.headersSent)
             res.writeHead(502); res.end(); });

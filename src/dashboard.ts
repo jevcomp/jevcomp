@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { applySettingsChange, settingsSnapshot } from './dashboard-settings.js';
 import { readableHistoryPaths, readHistory, type HistoryRow } from './store.js';
+import { experimentPackage } from './experiment-package.js';
 import { settingsPath, userSettings } from './settings.js';
 import type { CallDecision } from './types.js';
 import { VERSION } from './version.js';
@@ -371,6 +372,8 @@ td{padding:11px 10px;border-top:1px solid var(--line);vertical-align:middle}
 table.rb th,table.rb td{white-space:nowrap}table.rb .rb-grow{width:100%}
 .rb-bar{height:10px;min-width:160px}.rb-bar .before{display:block;height:100%;background:color-mix(in srgb,var(--muted) 45%,var(--surface));border-radius:4px;overflow:hidden}.rb-bar .after{display:block;height:100%;background:var(--accent)}
 .rb-cut{font-size:12px;color:var(--accent)}
+.meter{height:10px;border-radius:999px;background:var(--raised);border:1px solid var(--line);overflow:hidden}.meter span{display:block;height:100%;background:var(--accent)}
+.verdict{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:grid;gap:6px}
 .decisions-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
 .filters button{font-size:12px;padding:5px 11px}
 .cmd{font-family:var(--mono);font-size:12.5px;display:block;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cmd-kind{display:block;font-size:11px;color:var(--muted);margin-top:2px}
@@ -437,7 +440,7 @@ table.rb th,table.rb td{white-space:nowrap}table.rb .rb-grow{width:100%}
     <div class="groups">
      <div class="card group"><div class="group-head"><h2>Comportamento</h2><span class="small muted" id="behavior-sub">Cada mudança é salva na hora</span></div>
       <div id="behavior"></div>
-      <div class="setting" id="audit-setting"><h3>Auditoria das decisões</h3><p id="audit-description"></p><div id="audit-controls"></div></div>
+      <div class="setting" id="measure-setting"><h3>Medir o ganho do jevcomp</h3><p id="measure-description"></p><div id="measure-controls"></div></div>
       <div class="setting" id="reset-area"><h3>Voltar ao padrão</h3><p>Desfaz as mudanças acima. Provedor e chave continuam como estão.</p><div class="control"></div></div>
      </div>
     </div>
@@ -652,11 +655,31 @@ function renderSettings(s){
   const note=(locked?'<span class="note">Definido pela variável '+esc(item.lockedBy)+' no seu sistema. Remova a variável para mudar aqui.</span>':'');
   return '<div class="setting"><h3>'+text.title+'</h3><p>'+text.help.replace('AGENT',AGENT_NAME[agent])+'</p><div class="control seg'+(text.numbers?' numbers':'')+'" role="group" aria-label="'+text.title+'" data-name="'+item.name+'"'+(locked?' aria-disabled="true"':'')+'>'+buttons+'</div>'+note+'</div>';
   }).join('');
-  const audit=s.audit;
-  $('#audit-description').textContent=!audit.supported?'Auditoria disponível para Codex e Claude Code.':audit.mode==='evidence'
-   ?'O modo Evidências guarda localmente conteúdo das conversas e resultados a partir da próxima compactação para inspecionar decisões. As informações podem conter dados privados.'
-   :'O modo Metadados registra, a partir da próxima compactação, pontuações, tamanhos e hashes, sem guardar o conteúdo da conversa.';
-  $('#audit-controls').innerHTML=!audit.supported?'<p class="note">Este agente ainda não fornece os dados necessários para auditoria.</p>':'<div class="control seg" role="group" aria-label="Modo da auditoria"><button type="button" data-audit-mode="metadata" aria-pressed="'+(audit.mode==='metadata')+'">Metadados</button><button type="button" data-audit-mode="evidence" aria-pressed="'+(audit.mode==='evidence')+'">Evidências</button></div><div class="control" style="margin-top:10px"><button class="btn '+(audit.enabled?'':'primary')+'" type="button" data-audit-toggle aria-pressed="'+audit.enabled+'">'+(audit.enabled?'Desativar auditoria':'Ativar auditoria')+'</button><span class="small muted" style="margin-left:10px">'+(audit.enabled?'Ativa para '+AGENT_TITLE[agent]:'Desligada para '+AGENT_TITLE[agent])+'</span></div>';
+  renderMeasurement(s.measurement);
+}
+const signedPct=v=>(v>=0?'':'−')+Math.abs(Math.round(v*100))+'%';
+function verdictText(r){
+ const range=' (margem de '+signedPct(r.interval[0])+' a '+signedPct(r.interval[1])+')';
+ if(r.verdict==='gain')return 'O jevcomp economiza '+signedPct(r.savingRatio)+range+'.';
+ if(r.verdict==='loss')return 'O jevcomp gasta '+signedPct(-r.savingRatio)+' a mais'+range+'.';
+ return 'Sem diferença clara entre usar e não usar o jevcomp'+range+'.';
+}
+function renderMeasurement(m){
+ const unit=agent==='agy'?'sessões':'compactações';
+ $('#measure-description').textContent='Durante a medição, metade das '+unit+' do '+AGENT_TITLE[agent]+' fica sem o Jev, para comparar quantos tokens cada lado gasta. Quando houver dados suficientes, a medição para sozinha e o resultado fica salvo aqui.';
+ let html='';
+ if(m.active){
+  const bar=Math.round(m.progress*100);
+  html+='<div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+bar+'" aria-label="Dados coletados"><span style="width:'+bar+'%"></span></div>'
+   +'<p class="small" style="margin-top:6px">'+bar+'% dos dados necessários · com Jev: <b class="num">'+m.samples.jev+'/'+m.needed+'</b> · sem Jev: <b class="num">'+m.samples.native+'/'+m.needed+'</b>'+(m.pending?' · '+m.pending+' aguardando as próximas respostas':'')+'</p>'
+   +(m.estimate?'<p class="small muted">Prévia, ainda sem precisão suficiente: '+esc(verdictText(m.estimate))+'</p>':'');
+ }
+ html+='<div class="control" style="margin-top:10px"><button class="btn '+(m.active?'':'primary')+'" type="button" data-measure aria-pressed="'+m.active+'">'+(m.active?'Parar medição':'Iniciar medição')+'</button></div>';
+ const r=m.lastResult;
+ if(r)html+='<div class="verdict"><h3>Último resultado · '+esc(stamp(r.finishedAt))+'</h3><p><b>'+esc(verdictText(r))+'</b></p>'
+  +'<p class="small muted">Média por '+(agent==='agy'?'sessão':'compactação')+': com Jev <span class="num">'+Math.round(r.meanCost.jev).toLocaleString('pt-BR')+'</span>, sem Jev <span class="num">'+Math.round(r.meanCost.native).toLocaleString('pt-BR')+'</span> tokens equivalentes ('+r.samples.jev+' e '+r.samples.native+' amostras). O custo do próprio Jev, <span class="num">'+(r.jevTokens.input+r.jevTokens.output).toLocaleString('pt-BR')+'</span> tokens, não entra nessa conta.</p>'
+  +'<div class="control" style="margin-top:8px"><button class="btn" type="button" data-package>Copiar pacote para análise por IA</button><span class="small muted" style="margin-left:10px">Para sugestões de melhoria. Contém trechos das conversas: revise antes de enviar.</span></div></div>';
+ $('#measure-controls').innerHTML=html;
 }
 function settingsUrl(){return '/api/settings?agent='+encodeURIComponent(agent||'codex')}
 function loadSettings(){return fetch(settingsUrl(),{cache:'no-store'}).then(r=>r.json()).then(renderSettings).catch(e=>toast('Erro ao ler as configurações: '+e.message,true))}
@@ -683,11 +706,12 @@ $('#connection').addEventListener('submit',e=>{
  send({action:'key',provider,key},switching?'Chave salva. Agora usando '+PROVIDER_NAME[provider]:'Chave salva');
 });
 $('#behavior').addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.disabled)return;send({action:'setting',name:b.closest('.seg').dataset.name,value:b.dataset.value})});
-$('#audit-controls').addEventListener('click',e=>{
- const b=e.target.closest('button');if(!b||b.disabled||!settingsState?.audit.supported)return;
- const mode=b.dataset.auditMode||settingsState.audit.mode;
- const enabled=b.hasAttribute('data-audit-toggle')?!settingsState.audit.enabled:settingsState.audit.enabled;
- send({action:'audit',enabled,mode},enabled?'Auditoria ativada para '+AGENT_TITLE[agent]:'Configuração da auditoria salva');
+$('#measure-controls').addEventListener('click',e=>{
+ const b=e.target.closest('button');if(!b||!settingsState)return;
+ if(b.hasAttribute('data-measure')){const enabled=!settingsState.measurement.active;send({action:'measure',enabled},enabled?'Medição iniciada para '+AGENT_TITLE[agent]:'Medição parada');return}
+ if(b.hasAttribute('data-package'))fetch('/api/measurement-package?agent='+encodeURIComponent(agent),{headers:{'x-jevcomp-token':token},cache:'no-store'})
+  .then(r=>r.ok?r.text():r.json().then(j=>{throw Error(j.error||'HTTP '+r.status)}))
+  .then(text=>navigator.clipboard.writeText(text)).then(()=>toast('Pacote copiado. Cole numa IA de sua escolha.')).catch(e=>toast('Não copiado: '+e.message,true));
 });
 function showReset(){
  const area=$('#reset-area .control');
@@ -773,6 +797,16 @@ export async function startDashboard(port = 43127, env = process.env): Promise<{
       if (url.pathname === '/api/stats') {
         const agent = url.searchParams.get('agent');
         return json(res, await currentStats(agent === 'codex' || agent === 'claude' || agent === 'agy' ? agent : undefined));
+      }
+      if (url.pathname === '/api/measurement-package') {
+        if (req.headers['x-jevcomp-token'] !== token) return json(res, { error: 'forbidden' }, 403);
+        const requested = url.searchParams.get('agent');
+        if (requested !== 'codex' && requested !== 'claude' && requested !== 'agy') return json(res, { error: 'invalid agent' }, 400);
+        try {
+          const text = await experimentPackage(env, requested);
+          res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(text);
+        } catch (error) { return json(res, { error: error instanceof Error ? error.message : String(error) }, 400); }
       }
       if (url.pathname === '/api/history') return json(res, (await readHistory(env)).slice(-200).reverse());
       if (url.pathname !== '/') return json(res, { error: 'not found' }, 404);

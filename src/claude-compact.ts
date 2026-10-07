@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { beginAudit } from './audit.js';
 import { compactMessages, reductionRatio } from './compact.js';
+import { assignArm, recordFallback, recordJevTokens } from './experiment.js';
 import { applyJevCut, claudeMessageChars, safeJevCut, toJevMessages, type ClaudeMessage, type JevCut } from './claude.js';
 import { jevCompactOptions } from './hooks.js';
 import { userSettings } from './settings.js';
@@ -19,6 +20,11 @@ export async function compactForClaude(body: Record<string, unknown>, baseEnv: R
   const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined;
   const minimum = userSettings(env, 'claude').minReductionRatio;
   const jev = jevCompactOptions(env, 'claude');
+  const measured = sessionId && messages.length >= 2 ? await assignArm(env, 'claude', sessionId) : undefined;
+  if (measured?.arm === 'native') {
+    await tryAppendHistory({ at, runId, sessionId: sessionId!, host: 'claude', phase: 'precompact', status: 'skipped', detail: 'gain measurement: this compaction was left to Claude Code' }, env);
+    return { apply: false, reason: 'gain measurement: Claude Code compacts this time' };
+  }
   const audit = await beginAudit(env, 'claude', runId, messages, { minReductionRatio: minimum, provider: jev.provider, model: jev.model }, sessionId, typeof body.agentId === 'string' ? body.agentId : undefined);
   const row = { at, runId, ...(audit ? { auditId: runId } : {}), sessionId: sessionId ?? runId, trigger: typeof body.trigger === 'string' ? body.trigger : undefined, host: 'claude' as const, phase: 'precompact' as const };
   if (messages.length < 2) {
@@ -28,6 +34,7 @@ export async function compactForClaude(body: Record<string, unknown>, baseEnv: R
   }
   try {
     const result = await compactMessages(messages, { ...jev, auditObserver: audit?.observe });
+    await recordJevTokens(env, 'claude', measured?.unitId, result.stats.jevInputTokens, result.stats.jevOutputTokens);
     const truncated: Record<string, string> = {};
     for (const message of result.messages) {
       for (const output of message.toolResults ?? []) {
@@ -59,6 +66,7 @@ export async function compactForClaude(body: Record<string, unknown>, baseEnv: R
       const detail = actualReduction <= 0 ? 'host-safe cut made no reduction' : `reduction below ${minimum}`;
       const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'skipped', stats, decisions, detail }, env);
       await audit?.finish('rejected', reason, recorded);
+      await recordFallback(env, 'claude', measured?.unitId);
       return { apply: false, reason: actualReduction <= 0 ? 'no reduction' : `reduction below ${Math.round(minimum * 100)}%` };
     }
     const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'prepared', stats, decisions, retainedChars: hostAfterChars }, env);
@@ -74,6 +82,7 @@ export async function compactForClaude(body: Record<string, unknown>, baseEnv: R
   } catch (error) {
     const recorded = await tryAppendHistory({ ...row, provider: jev.provider, status: 'failed', detail: error instanceof Error ? error.message : String(error) }, env);
     await audit?.finish('failed', 'compaction_failed', recorded);
+    await recordFallback(env, 'claude', measured?.unitId);
     throw error;
   }
 }

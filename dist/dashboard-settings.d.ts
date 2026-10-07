@@ -1,6 +1,6 @@
 import { type KeyStatus } from './provider.js';
 import { type SettingName, type SettingsAgent } from './settings.js';
-import { type AuditMode } from './audit-store.js';
+import { type ExperimentProgress } from './experiment.js';
 type Env = Record<string, string | undefined>;
 type Provider = 'openrouter' | 'typesafe';
 export interface SettingsSnapshot {
@@ -27,11 +27,7 @@ export interface SettingsSnapshot {
         };
     };
     dashboardUrl: string;
-    audit: {
-        supported: boolean;
-        enabled: boolean;
-        mode: AuditMode;
-    };
+    measurement: ExperimentProgress;
     settings: Array<{
         name: SettingName;
         value: string;

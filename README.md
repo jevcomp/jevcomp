@@ -153,6 +153,12 @@ Open **http://127.0.0.1:43127/**. It starts by itself when a Codex or Claude Cod
 
 It shows only what jevcomp can measure: characters before and after each compaction, what was sent back, each Keep / Shorten / Remove decision with its risk, Jev requests and tokens, and runs that were skipped or failed. It does not estimate billing-token savings.
 
+### Measure the gain
+
+**Settings → Measure the gain** answers whether jevcomp saves tokens compared with not using it. While it runs, each compaction (each conversation in Antigravity) is randomly left to the agent without Jev, and jevcomp records the tokens the agent's model bills for the compaction and the requests after it. When there is enough data, the measurement stops by itself and the verdict stays on the page: saving or extra cost, with its 95% margin. Jev's own tokens are shown separately.
+
+The **Copy package for AI analysis** button copies the verdict plus audited decision cases and a ready prompt, for another AI to suggest setting changes. It contains conversation excerpts: review it before sending.
+
 ## Settings
 
 Run `jevcomp settings`, use the **Settings** page of the dashboard, or ask the agent to change a jevcomp setting. Each program has its own settings. The defaults suit most people.
@@ -202,7 +208,7 @@ To preview what Jev would keep from a Codex rollout without changing anything: `
 
 ## Data
 
-Everything is in `~/.jevcomp` (or `JEVCOMP_DATA_DIR`): `history.jsonl` for the dashboard. History from versions before 0.7.0, in `~/.codex/jevcomp` and the old Codex plugin data folder, is still read.
+Everything is in `~/.jevcomp` (or `JEVCOMP_DATA_DIR`): `history.jsonl` for the dashboard, keeping the last 7 days (`JEVCOMP_HISTORY_DAYS`), and `experiment.json` / `experiment.jsonl` for the gain measurement. History from versions before 0.7.0, in `~/.codex/jevcomp` and the old Codex plugin data folder, is still read.
 
 ## Development
 
