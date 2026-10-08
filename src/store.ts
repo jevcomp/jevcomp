@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { legacyHistoryPaths } from './legacy.js';
@@ -52,10 +52,46 @@ async function ensurePrivateDir(path: string): Promise<void> {
   try { await chmod(path, 0o700); } catch {}
 }
 
+function errorCode(error: unknown): string | undefined {
+  return error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code ?? '') : undefined;
+}
+
+async function withHistoryWriteLock<T>(path: string, action: () => Promise<T>): Promise<T> {
+  const lock = `${path}.write.lock`;
+  await ensurePrivateDir(dirname(path));
+  let acquired = false;
+  for (let attempt = 0; attempt < 500; attempt++) {
+    try {
+      await mkdir(lock);
+      acquired = true;
+      try { await writeFile(join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 }); }
+      catch (error) { await rm(lock, { recursive: true, force: true }); acquired = false; throw error; }
+      break;
+    } catch (error) {
+      if (acquired || errorCode(error) !== 'EEXIST') throw error;
+      let ownerKnown = false;
+      try {
+        const owner = JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8')) as { pid?: number };
+        if (Number.isSafeInteger(owner.pid) && owner.pid! > 0) {
+          ownerKnown = true;
+          try { process.kill(owner.pid!, 0); }
+          catch (dead) { if (errorCode(dead) === 'ESRCH') await rm(lock, { recursive: true, force: true }); }
+        }
+      } catch {}
+      if (!ownerKnown) {
+        try { if (Date.now() - Number((await stat(lock)).mtimeMs) > 10_000) await rm(lock, { recursive: true, force: true }); } catch {}
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+  if (!acquired) throw new Error('history writer busy');
+  try { return await action(); }
+  finally { await rm(lock, { recursive: true, force: true }); }
+}
+
 export async function appendHistory(row: HistoryRow, env = process.env): Promise<void> {
   const path = historyPath(env);
-  await ensurePrivateDir(dirname(path));
-  await appendFile(path, `${JSON.stringify(row)}\n`, { mode: 0o600 });
+  await withHistoryWriteLock(path, () => appendFile(path, `${JSON.stringify(row)}\n`, { mode: 0o600 }));
 }
 
 export async function tryAppendHistory(row: HistoryRow, env = process.env): Promise<boolean> {
@@ -123,17 +159,19 @@ async function rewriteHistory(path: string, kept: readonly HistoryRow[], readSiz
   const temporary = `${path}.${process.pid}.tmp`;
   historyCache.delete(path);
   try {
-    await writeFile(temporary, kept.map((row) => `${JSON.stringify(row)}\n`).join(''), { mode: 0o600 });
-    const handle = await open(path, 'r');
-    try {
-      const { size } = await handle.stat();
-      if (size > readSize) {
-        const tail = Buffer.alloc(size - readSize);
-        await handle.read(tail, 0, tail.length, readSize);
-        await appendFile(temporary, tail);
-      }
-    } finally { await handle.close().catch(() => {}); }
-    await rename(temporary, path);
+    await withHistoryWriteLock(path, async () => {
+      await writeFile(temporary, kept.map((row) => `${JSON.stringify(row)}\n`).join(''), { mode: 0o600 });
+      const handle = await open(path, 'r');
+      try {
+        const { size } = await handle.stat();
+        if (size > readSize) {
+          const tail = Buffer.alloc(size - readSize);
+          await handle.read(tail, 0, tail.length, readSize);
+          await appendFile(temporary, tail);
+        }
+      } finally { await handle.close().catch(() => {}); }
+      await rename(temporary, path);
+    });
   } catch {
     await rm(temporary, { force: true }).catch(() => {});
   }
