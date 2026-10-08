@@ -134,6 +134,22 @@ async function settingsBaseUrl(env) {
     }
     return undefined;
 }
+function isLoopbackUrl(value) {
+    try {
+        const host = new URL(value).hostname.toLowerCase();
+        return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+    }
+    catch {
+        return false;
+    }
+}
+function claudeUpstream(configuredBase, envBase, gatewayUrl) {
+    const requested = configuredBase ?? envBase ?? 'https://api.anthropic.com';
+    const normalized = requested.replace(/\/$/, '');
+    if (normalized === gatewayUrl || isLoopbackUrl(requested))
+        return 'https://api.anthropic.com';
+    return requested;
+}
 export function claudeProxyUnsupportedReason(env) {
     if (envEnabled(env.CLAUDE_CODE_USE_BEDROCK) || env.ANTHROPIC_BEDROCK_BASE_URL)
         return 'Bedrock routing is active';
@@ -280,9 +296,7 @@ export async function runClaude(args, env = process.env, options = {}) {
             }
             else {
                 const stableUrl = claudeGatewayUrl(env);
-                const requestedUpstream = configuredBase ?? env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com';
-                const upstream = requestedUpstream.replace(/\/$/, '') === stableUrl ? 'https://api.anthropic.com' : requestedUpstream;
-                const stable = await ensureClaudeGateway(upstream, env);
+                const stable = await ensureClaudeGateway(claudeUpstream(configuredBase, env.ANTHROPIC_BASE_URL, stableUrl), env);
                 proxy = { baseUrl: stable.url, upstream: stable.upstream };
             }
         }
