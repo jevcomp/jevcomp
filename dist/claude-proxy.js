@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { dataDir } from './store.js';
 import { launch } from './command.js';
 import { recordUsage } from './experiment.js';
+import { claudeGatewayUrl, ensureClaudeGateway } from './claude-gateway-service.js';
+import { VERSION } from './version.js';
 function positiveInt(value) {
     return Number.isInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 }
@@ -149,13 +151,27 @@ export function claudeProxyUnsupportedReason(env) {
         return 'an HTTP(S) corporate proxy is already configured';
     return undefined;
 }
-export async function startClaudeProxy(env = process.env) {
+export async function startClaudeProxy(env = process.env, serverOptions = {}) {
     const base = new URL(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com');
     if (base.protocol !== 'http:' && base.protocol !== 'https:')
         throw new Error('ANTHROPIC_BASE_URL must use http or https');
     const requestFn = base.protocol === 'https:' ? httpsRequest : httpRequest;
     const sockets = new Set();
+    let localBaseUrl = '';
     const server = createServer((req, res) => {
+        if (req.method === 'GET' && req.url === '/__jevcomp/health' && serverOptions.instanceId) {
+            res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+            res.end(JSON.stringify({
+                service: 'jevcomp-claude-gateway',
+                pid: process.pid,
+                instanceId: serverOptions.instanceId,
+                url: localBaseUrl,
+                upstream: base.toString().replace(/\/$/, ''),
+                build: serverOptions.build ?? '',
+                version: VERSION,
+            }));
+            return;
+        }
         const started = Date.now();
         const target = upstreamUrl(base, req.url ?? '/');
         const headerSession = req.headers['x-claude-code-session-id'];
@@ -231,13 +247,14 @@ export async function startClaudeProxy(env = process.env) {
     });
     await new Promise((resolve, reject) => {
         server.once('error', reject);
-        server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
+        server.listen(serverOptions.port ?? 0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
     });
     const address = server.address();
     if (!address || typeof address === 'string')
         throw new Error('Claude proxy did not bind a TCP port');
+    localBaseUrl = `http://127.0.0.1:${address.port}`;
     return {
-        baseUrl: `http://127.0.0.1:${address.port}`,
+        baseUrl: localBaseUrl,
         upstream: base.toString(),
         close: () => new Promise((resolve) => {
             for (const socket of sockets)
@@ -252,11 +269,22 @@ export async function runClaude(args, env = process.env, options = {}) {
     }
     catch { }
     let proxy;
+    let ephemeralProxy = false;
     const unsupported = claudeProxyUnsupportedReason(env);
     const configuredBase = await settingsBaseUrl(env);
     if (!unsupported) {
         try {
-            proxy = await (options.startProxy ?? startClaudeProxy)(configuredBase ? { ...env, ANTHROPIC_BASE_URL: configuredBase } : env);
+            if (options.startProxy) {
+                proxy = await options.startProxy(configuredBase ? { ...env, ANTHROPIC_BASE_URL: configuredBase } : env);
+                ephemeralProxy = true;
+            }
+            else {
+                const stableUrl = claudeGatewayUrl(env);
+                const requestedUpstream = configuredBase ?? env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com';
+                const upstream = requestedUpstream.replace(/\/$/, '') === stableUrl ? 'https://api.anthropic.com' : requestedUpstream;
+                const stable = await ensureClaudeGateway(upstream, env);
+                proxy = { baseUrl: stable.url, upstream: stable.upstream };
+            }
         }
         catch (error) {
             console.error(`jevcomp Claude gateway is off (${error instanceof Error ? error.message : String(error)}); starting plain Claude Code.`);
@@ -281,7 +309,8 @@ export async function runClaude(args, env = process.env, options = {}) {
         });
     }
     finally {
-        await proxy?.close();
+        if (ephemeralProxy)
+            await proxy?.close?.();
         if (override)
             await rm(override, { force: true }).catch(() => { });
     }

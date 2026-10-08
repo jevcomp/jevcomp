@@ -7,13 +7,14 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compactForClaude } from './claude-compact.js';
-import { runClaude } from './claude-proxy.js';
+import { runClaude, startClaudeProxy } from './claude-proxy.js';
 import { runCodex } from './codex-proxy.js';
 import { commandExists, runSync } from './command.js';
 import { agyCaInstalled, agyCertificateThumbprint, installAgyCa, runAgy, uninstallAgyCa } from './agy-proxy.js';
 import { compactMessages, reductionRatio } from './compact.js';
 import { startDashboard } from './dashboard.js';
 import { dashboardInstancePath, dashboardPort, ensureDashboard, restartDashboard, runningDashboard, stopDashboard } from './dashboard-service.js';
+import { claudeGatewayInstancePath, claudeGatewayPort, stopClaudeGateway } from './claude-gateway-service.js';
 import { enableFunctionHooks, handleHook } from './hooks.js';
 import { resetUserSettings, setUserSetting, userSettings, type SettingName, type SettingsAgent } from './settings.js';
 import { describeSettings, runSettingsMenu, SETTINGS_ITEMS } from './settings-menu.js';
@@ -242,6 +243,7 @@ async function uninstall(args: readonly string[]): Promise<void> {
 
   if (agents.includes('agy')) console.log(agyInstalled ? 'jevcomp was removed from Antigravity.' : 'jevcomp was not installed in Antigravity.');
   if (agents.includes('claude')) {
+    await stopClaudeGateway(process.env);
     if (claudeInstalled) removeClaudePlugin();
     console.log(claudeInstalled ? 'jevcomp was removed from Claude Code.' : 'jevcomp was not installed in Claude Code.');
   }
@@ -282,6 +284,20 @@ async function main(): Promise<void> {
 
   if (cmd === 'install') { await install(args); return; }
   if (cmd === 'uninstall') { await uninstall(args); return; }
+  if (cmd === 'claude-gateway') {
+    const requested = flag(args, '--port');
+    const port = requested ? Number(requested) : claudeGatewayPort(process.env);
+    if (!Number.isInteger(port) || port <= 0 || port >= 65_536) throw new Error('invalid Claude gateway port');
+    const upstream = process.env.JEVCOMP_CLAUDE_GATEWAY_UPSTREAM ?? 'https://api.anthropic.com';
+    const instanceId = process.env.JEVCOMP_CLAUDE_GATEWAY_INSTANCE_ID ?? randomUUID();
+    const build = process.env.JEVCOMP_CLAUDE_GATEWAY_BUILD ?? '';
+    const proxy = await startClaudeProxy({ ...process.env, ANTHROPIC_BASE_URL: upstream }, { port, instanceId, build });
+    await mkdir(dataDir(process.env), { recursive: true, mode: 0o700 });
+    await writeFile(claudeGatewayInstancePath(port, process.env), JSON.stringify({ pid: process.pid, instanceId, url: proxy.baseUrl, upstream: proxy.upstream, build }), { mode: 0o600 });
+    process.stdout.write(`${proxy.baseUrl}
+`);
+    return;
+  }
   if (cmd === 'codex') {
     process.exitCode = await runCodex(args, process.env, { startDashboard: () => ensureDashboard(dashboardPort(process.env), process.env) });
     return;

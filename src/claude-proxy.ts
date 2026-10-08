@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { dataDir } from './store.js';
 import { launch } from './command.js';
 import { recordUsage } from './experiment.js';
+import { claudeGatewayUrl, ensureClaudeGateway } from './claude-gateway-service.js';
+import { VERSION } from './version.js';
 
 type Env = Record<string, string | undefined>;
 type RequestFn = typeof httpRequest;
@@ -159,13 +161,33 @@ export function claudeProxyUnsupportedReason(env: Env): string | undefined {
   return undefined;
 }
 
-export async function startClaudeProxy(env: Env = process.env) {
+export interface ClaudeProxyServerOptions {
+  port?: number;
+  instanceId?: string;
+  build?: string;
+}
+
+export async function startClaudeProxy(env: Env = process.env, serverOptions: ClaudeProxyServerOptions = {}) {
   const base = new URL(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com');
   if (base.protocol !== 'http:' && base.protocol !== 'https:') throw new Error('ANTHROPIC_BASE_URL must use http or https');
   const requestFn: RequestFn = base.protocol === 'https:' ? httpsRequest as RequestFn : httpRequest;
   const sockets = new Set<any>();
+  let localBaseUrl = '';
 
   const server = createServer((req: any, res: any) => {
+    if (req.method === 'GET' && req.url === '/__jevcomp/health' && serverOptions.instanceId) {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({
+        service: 'jevcomp-claude-gateway',
+        pid: process.pid,
+        instanceId: serverOptions.instanceId,
+        url: localBaseUrl,
+        upstream: base.toString().replace(/\/$/, ''),
+        build: serverOptions.build ?? '',
+        version: VERSION,
+      }));
+      return;
+    }
     const started = Date.now();
     const target = upstreamUrl(base, req.url ?? '/');
     const headerSession = req.headers['x-claude-code-session-id'];
@@ -230,12 +252,13 @@ export async function startClaudeProxy(env: Env = process.env) {
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
+    server.listen(serverOptions.port ?? 0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
   });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Claude proxy did not bind a TCP port');
+  localBaseUrl = `http://127.0.0.1:${address.port}`;
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: localBaseUrl,
     upstream: base.toString(),
     close: () => new Promise<void>((resolve) => {
       for (const socket of sockets) socket.destroy();
@@ -252,12 +275,23 @@ export async function startClaudeProxy(env: Env = process.env) {
   } = {},
 ): Promise<number> {
   try { await options.startDashboard?.(); } catch {}
-  let proxy: Awaited<ReturnType<typeof startClaudeProxy>> | undefined;
+  let proxy: Awaited<ReturnType<typeof startClaudeProxy>> | { baseUrl: string; upstream: string; close?: () => Promise<void> } | undefined;
+  let ephemeralProxy = false;
   const unsupported = claudeProxyUnsupportedReason(env);
   const configuredBase = await settingsBaseUrl(env);
   if (!unsupported) {
-    try { proxy = await (options.startProxy ?? startClaudeProxy)(configuredBase ? { ...env, ANTHROPIC_BASE_URL: configuredBase } : env); }
-    catch (error) {
+    try {
+      if (options.startProxy) {
+        proxy = await options.startProxy(configuredBase ? { ...env, ANTHROPIC_BASE_URL: configuredBase } : env);
+        ephemeralProxy = true;
+      } else {
+        const stableUrl = claudeGatewayUrl(env);
+        const requestedUpstream = configuredBase ?? env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com';
+        const upstream = requestedUpstream.replace(/\/$/, '') === stableUrl ? 'https://api.anthropic.com' : requestedUpstream;
+        const stable = await ensureClaudeGateway(upstream, env);
+        proxy = { baseUrl: stable.url, upstream: stable.upstream };
+      }
+    } catch (error) {
       console.error(`jevcomp Claude gateway is off (${error instanceof Error ? error.message : String(error)}); starting plain Claude Code.`);
     }
   } else {
@@ -278,7 +312,7 @@ export async function startClaudeProxy(env: Env = process.env) {
       child.once('close', (code: number | null, signal: string | null) => resolve(code ?? (signal ? 128 : 1)));
     });
   } finally {
-    await proxy?.close();
+    if (ephemeralProxy) await proxy?.close?.();
     if (override) await rm(override, { force: true }).catch(() => {});
   }
 }

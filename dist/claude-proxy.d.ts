@@ -13,7 +13,12 @@ export interface ClaudeUsageRow {
     outputTokens?: number;
 }
 export declare function claudeProxyUnsupportedReason(env: Env): string | undefined;
-export declare function startClaudeProxy(env?: Env): Promise<{
+export interface ClaudeProxyServerOptions {
+    port?: number;
+    instanceId?: string;
+    build?: string;
+}
+export declare function startClaudeProxy(env?: Env, serverOptions?: ClaudeProxyServerOptions): Promise<{
     baseUrl: string;
     upstream: string;
     close: () => Promise<void>;

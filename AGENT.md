@@ -18,3 +18,4 @@
 - Do not add tests for this change.
 - Preserve fail-open behavior and existing public configuration.
 - Compile/validate TypeScript only; no new test files.
+- Keep the Claude inference gateway persistent on 127.0.0.1:16392 so background/resumed sessions survive wrapper restarts.
