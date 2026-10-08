@@ -45,6 +45,38 @@ export function runtimeDir(env = process.env): string {
   return env.JEVCOMP_RUNTIME_DIR ?? join(codexHome(env), 'jevcomp', 'runtime');
 }
 
+function legacyCodexPluginSection(header: string): boolean {
+  const value = header.trim();
+  if (value === 'plugins."jevcomp@jevcomp"' || value === "plugins.'jevcomp@jevcomp'") return true;
+  return (value.startsWith('hooks.state."jevcomp@jevcomp:hooks/codex.json:') && value.endsWith('"'))
+    || (value.startsWith("hooks.state.'jevcomp@jevcomp:hooks/codex.json:") && value.endsWith("'"));
+}
+
+export async function removeLegacyCodexPluginConfig(env = process.env): Promise<string> {
+  const path = env.CODEX_CONFIG_FILE ?? join(codexHome(env), 'config.toml');
+  let text: string;
+  try { text = await readFile(path, 'utf8'); }
+  catch (error) {
+    if (errorCode(error) === 'ENOENT') return path;
+    throw error;
+  }
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const hadFinalNewline = /\r?\n$/.test(text);
+  const kept: string[] = [];
+  let removing = false;
+  for (const line of text.split(/\r?\n/)) {
+    const section = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
+    if (section) removing = legacyCodexPluginSection(section[1]!);
+    if (!removing) kept.push(line);
+  }
+  let next = kept.join(eol);
+  if (hadFinalNewline && !next.endsWith(eol)) next += eol;
+  if (next === text) return path;
+  await copyFile(path, `${path}.bak.${Date.now()}`);
+  await writeFile(path, next, { mode: 0o600 });
+  return path;
+}
+
 export async function removeLegacyHooks(env = process.env): Promise<string> {
   const path = env.CODEX_HOOKS_FILE ?? join(codexHome(env), 'hooks.json');
   let loaded: { config: HookConfig; existed: boolean };

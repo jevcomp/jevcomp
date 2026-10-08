@@ -16,7 +16,7 @@ import { dashboardInstancePath, dashboardPort, ensureDashboard, restartDashboard
 import { enableFunctionHooks, handleHook } from './hooks.js';
 import { resetUserSettings, setUserSetting, userSettings } from './settings.js';
 import { describeSettings, runSettingsMenu, SETTINGS_ITEMS } from './settings-menu.js';
-import { removeLegacyHooks, runtimeDir } from './install.js';
+import { removeLegacyCodexPluginConfig, removeLegacyHooks, runtimeDir } from './install.js';
 import { adoptLegacyEnvironment, migrateLegacyConfig } from './legacy.js';
 import { configDir, hasSavedProviderKey, providerConfig, resolveApiKey, resolveProvider, saveProviderConfiguration } from './provider.js';
 import { renderMessages } from './render.js';
@@ -90,6 +90,19 @@ function removeClaudePlugin() {
         }
         catch { }
     }
+}
+function removeLegacyCodexPlugin() {
+    for (const argv of [['plugin', 'remove', 'jevcomp@jevcomp'], ['plugin', 'marketplace', 'remove', 'jevcomp']]) {
+        try {
+            runSync('codex', argv, { stdio: 'ignore', timeout: 60_000, windowsHide: true });
+        }
+        catch { }
+    }
+}
+async function cleanLegacyCodexInstall() {
+    removeLegacyCodexPlugin();
+    await removeLegacyHooks(process.env);
+    await removeLegacyCodexPluginConfig(process.env);
 }
 /** Claude Code copies the plugin into its own cache, so this package folder is only read once. */
 async function installClaude() {
@@ -229,7 +242,7 @@ async function install(args) {
         console.log('Connected to Claude Code. Use `jevcomp claude` for the local model gateway; plain `claude` still uses the Jev compaction hook.');
     }
     if (agents.includes('codex')) {
-        await removeLegacyHooks(process.env);
+        await cleanLegacyCodexInstall();
         await rm(runtimeDir(process.env), { recursive: true, force: true });
         await mkdir(configDir(process.env), { recursive: true, mode: 0o700 });
         await writeFile(join(configDir(process.env), 'codex-installed'), '');
@@ -275,7 +288,7 @@ async function uninstall(args) {
         console.log(claudeInstalled ? 'jevcomp was removed from Claude Code.' : 'jevcomp was not installed in Claude Code.');
     }
     if (agents.includes('codex')) {
-        await removeLegacyHooks();
+        await cleanLegacyCodexInstall();
         await rm(runtimeDir(process.env), { recursive: true, force: true });
         await rm(codexMarker, { force: true });
         console.log(codexInstalled ? 'jevcomp was removed from Codex.' : 'jevcomp was not installed in Codex.');
