@@ -104,7 +104,7 @@ async function installClaude(): Promise<void> {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   removeClaudePlugin();
   runSync('claude', ['plugin', 'marketplace', 'add', packageRoot], { stdio: 'inherit', windowsHide: true });
-  runSync('claude', ['plugin', 'install', 'jevcomp@jevcomp'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
+  runSync('claude', ['plugin', 'install', 'jevcomp@jevcomp', '--yes'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
   console.log(await enableFunctionHooks(process.env));
 }
 
