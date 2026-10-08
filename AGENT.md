@@ -9,3 +9,9 @@
 - Fail open to native Codex compaction.
 - Add tests for adapters, compaction, hooks, and provider transports.
 - Avoid unnecessary comments; explain only non-obvious reasons.
+
+## Session 2026-10-08
+- Implement Jev compaction batching so oversized histories are judged incrementally instead of failing at maxStateTokens.
+- Do not add tests for this change.
+- Preserve fail-open behavior and existing public configuration.
+- Compile/validate TypeScript only; no new test files.
