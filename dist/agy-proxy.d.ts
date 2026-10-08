@@ -15,6 +15,10 @@ export declare function startAgyProxy(env?: Record<string, string | undefined>, 
     upstreamHost?: string;
     upstreamPort?: number;
     upstreamCa?: Uint8Array;
+    port?: number;
+    instanceId?: string;
+    build?: string;
+    config?: string;
 }): Promise<{
     url: string;
     close: () => Promise<void>;

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { codexArguments, runCodex } from '../dist/codex-proxy.js';
+import { codexArguments, runCodex, startCodexProxy } from '../dist/codex-proxy.js';
 
 test('Codex install writes its marker without creating hook configuration', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'jev-codex-install-'));
@@ -52,6 +52,7 @@ test('jevcomp codex injects its provider, preserves args, returns child status a
 
   const code = await runCodex(args, env, {
     upstreams: { chatgpt: `${upstreamUrl}/backend-api/codex`, api: `${upstreamUrl}/v1` },
+    startProxy: startCodexProxy,
     startDashboard: async () => {
       dashboardAttempted = true;
       throw new Error('dashboard unavailable');
@@ -77,9 +78,9 @@ test('jevcomp codex injects its provider, preserves args, returns child status a
   assert.equal(spawned.command, 'codex');
   assert.equal(spawned.options.env, env);
   assert.equal(spawned.options.stdio, 'inherit');
-  assert.deepEqual(spawned.childArgs.slice(0, 2), ['--no-daemon', 'exec']);
+  assert.equal(spawned.childArgs[0], 'exec');
   assert.deepEqual(spawned.childArgs.slice(-2), args.slice(1));
-  assert.ok(spawned.childArgs.includes('--no-daemon'));
+  assert.equal(spawned.childArgs.includes('--no-daemon'), false);
   assert.ok(spawned.childArgs.includes('model_provider="jevcomp"'));
   assert.ok(spawned.childArgs.includes('model_providers.jevcomp.name="jevcomp"'));
   assert.ok(spawned.childArgs.includes('model_providers.jevcomp.requires_openai_auth=true'));
@@ -115,7 +116,6 @@ test('provider config follows each supported Codex command path and preserves us
   for (const { args, before } of vectors) {
     const result = codexArguments(baseUrl, args);
     assert.deepEqual(result, [
-      '--no-daemon',
       ...args.slice(0, before),
       ...providerArgs,
       ...args.slice(before),

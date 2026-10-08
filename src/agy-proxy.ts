@@ -14,6 +14,8 @@ import { launch } from './command.js';
 import { randomUUID } from 'node:crypto';
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 import type { Message } from './types.js';
+import { ensureAgentProxy } from './agent-proxy-service.js';
+import { VERSION } from './version.js';
 
 const CA_NAME = 'jevcomp Antigravity local CA';
 const BODY_INTEGRITY_HEADERS = ['content-md5', 'content-digest', 'digest', 'x-goog-content-sha256'] as const;
@@ -147,7 +149,7 @@ function tapAgyUsage(upstream: any, done: (usage: TokenUsage) => Promise<void>):
   source.once('end', () => { tap.end(); if (usage) void done(usage); });
 }
 
-export async function startAgyProxy(env = process.env, options: { tunnelHost?: string; tunnelPort?: number; upstreamHost?: string; upstreamPort?: number; upstreamCa?: Uint8Array } = {}): Promise<{ url: string; close: () => Promise<void> }> {
+export async function startAgyProxy(env = process.env, options: { tunnelHost?: string; tunnelPort?: number; upstreamHost?: string; upstreamPort?: number; upstreamCa?: Uint8Array; port?: number; instanceId?: string; build?: string; config?: string } = {}): Promise<{ url: string; close: () => Promise<void> }> {
   const { directory } = await ensureAgyCertificate(env);
   const compactionState = createAgyCompactionState();
   const measuredArms = new Map<string, { arm: Arm; unitId: string }>();
@@ -178,7 +180,10 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
             if (measuredSession) {
               const key = `${runId}:${measuredSession}`;
               measured = measuredArms.get(key) ?? await assignArm(env, 'agy', measuredSession);
-              if (measured) measuredArms.set(key, measured);
+              if (measured) {
+                measuredArms.set(key, measured);
+                if (measuredArms.size > 128) measuredArms.delete(measuredArms.keys().next().value!);
+              }
             }
           } catch {}
         }
@@ -275,6 +280,7 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
   });
   const tls = createTlsServer({ key, cert }, (socket: any) => http.emit('connection', socket));
   const clients = new Set<any>();
+  let localUrl = '';
   const server = createNetServer((client: any) => {
     clients.add(client);
     client.once('close', () => clients.delete(client));
@@ -284,7 +290,13 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
       const end = header.indexOf('\r\n\r\n');
       if (end < 0) return;
       client.off('data', onData);
-      const line = header.subarray(0, end).toString('latin1').split('\r\n')[0] ?? '';
+      const head = header.subarray(0, end).toString('latin1');
+      const line = head.split('\r\n')[0] ?? '';
+      if (line === 'GET /__jevcomp/health HTTP/1.1' && options.instanceId) {
+        const body = JSON.stringify({ service: 'jevcomp-agy-proxy', pid: process.pid, instanceId: options.instanceId, url: localUrl, build: options.build ?? '', config: options.config ?? '', version: VERSION });
+        client.end(`HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+        return;
+      }
       const [, target = ''] = line.split(' ');
       const destination = line.startsWith('CONNECT ') ? connectTarget(target) : undefined;
       if (!destination) { client.destroy(); return; }
@@ -305,10 +317,11 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
     };
     client.on('data', onData);
   });
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.port ?? 0, '127.0.0.1', resolve); });
   const address = server.address() as { port: number };
+  localUrl = `http://127.0.0.1:${address.port}`;
   return {
-    url: `http://127.0.0.1:${address.port}`,
+    url: localUrl,
     close: () => new Promise<void>((resolve, reject) => {
       server.close((error?: Error) => error ? reject(error) : resolve());
       for (const client of clients) client.destroy();
@@ -318,11 +331,18 @@ export async function startAgyProxy(env = process.env, options: { tunnelHost?: s
 
 export async function runAgy(args: readonly string[], env = process.env, options: { spawn?: typeof spawn; isInstalled?: (thumbprint: string) => boolean; startProxy?: typeof startAgyProxy; startDashboard?: () => Promise<unknown> } = {}): Promise<number> {
   try { await options.startDashboard?.(); } catch {}
-  let proxy: Awaited<ReturnType<typeof startAgyProxy>> | undefined;
+  let proxy: { url: string; close?: () => Promise<void> } | undefined;
+  let ephemeralProxy = false;
   try {
     const certificate = await ensureAgyCertificate(env);
     if (!(options.isInstalled ?? agyCaInstalled)(certificate.thumbprint)) throw new Error('the jevcomp certificate is not installed; run `jevcomp install agy`');
-    proxy = await (options.startProxy ?? startAgyProxy)(env);
+    if (options.startProxy) {
+      proxy = await options.startProxy(env);
+      ephemeralProxy = true;
+    } else {
+      const stable = await ensureAgentProxy('agy', '{}', env);
+      proxy = { url: stable.url };
+    }
   } catch (error) {
     console.error(`jevcomp Antigravity proxy is off (${error instanceof Error ? error.message : String(error)}); starting plain agy.`);
   }
@@ -333,5 +353,5 @@ export async function runAgy(args: readonly string[], env = process.env, options
       child.once('error', reject);
       child.once('close', (code: number | null, signal: string | null) => resolve(code ?? (signal ? 128 : 1)));
     });
-  } finally { await proxy?.close(); }
+  } finally { if (ephemeralProxy) await proxy?.close?.(); }
 }

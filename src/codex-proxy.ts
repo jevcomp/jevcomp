@@ -15,9 +15,11 @@ import { appendResponseItem } from './rollout.js';
 import { userSettings } from './settings.js';
 import { captureDirectory, tryAppendHistory } from './store.js';
 import type { Message } from './types.js';
+import { ensureAgentProxy } from './agent-proxy-service.js';
+import { VERSION } from './version.js';
 
 type AuthRoute = 'chatgpt' | 'api';
-type Destinations = Record<AuthRoute, string>;
+export type Destinations = Record<AuthRoute, string>;
 
 const destinations: Destinations = {
   chatgpt: 'https://chatgpt.com/backend-api/codex',
@@ -46,7 +48,7 @@ async function authRoute(env: Record<string, string | undefined>): Promise<AuthR
 }
 
 /** Another tool (e.g. a local ChatGPT bridge) may own `openai_base_url`; bypassing it breaks its custom models. */
-async function configuredDestinations(env: Record<string, string | undefined>): Promise<Destinations> {
+export async function codexDestinations(env: Record<string, string | undefined>): Promise<Destinations> {
   const codexHome = env.CODEX_HOME?.trim() || join(homedir(), '.codex');
   let config: string;
   try { config = await readFile(join(codexHome, 'config.toml'), 'utf8'); } catch { return destinations; }
@@ -291,11 +293,18 @@ async function localCompaction(body: Uint8Array, env: Record<string, string | un
 export async function startCodexProxy(
   env: Record<string, string | undefined> = process.env,
   configuredUpstreams?: Destinations,
+  serverOptions: { port?: number; instanceId?: string; build?: string; config?: string } = {},
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
   const fallbackRoute = await authRoute(env);
-  const upstreams = configuredUpstreams ?? await configuredDestinations(env);
+  const upstreams = configuredUpstreams ?? await codexDestinations(env);
   const pendingAuditEvents = new Set<Promise<void>>();
+  let localBaseUrl = '';
   const server = createServer((request: any, response: any) => {
+    if (request.method === 'GET' && request.url === '/__jevcomp/health' && serverOptions.instanceId) {
+      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      response.end(JSON.stringify({ service: 'jevcomp-codex-proxy', pid: process.pid, instanceId: serverOptions.instanceId, url: localBaseUrl, build: serverOptions.build ?? '', config: serverOptions.config ?? '', version: VERSION }));
+      return;
+    }
     void (async () => {
       const body = await requestBody(request);
       const { path, search } = requestPath(request.url ?? '/');
@@ -361,7 +370,7 @@ export async function startCodexProxy(
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => reject(error);
     server.once('error', onError);
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(serverOptions.port ?? 0, '127.0.0.1', () => {
       server.off('error', onError);
       resolve();
     });
@@ -369,8 +378,9 @@ export async function startCodexProxy(
 
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Could not determine proxy address');
+  localBaseUrl = `http://127.0.0.1:${address.port}`;
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `${localBaseUrl}/v1`,
     close: async () => { await new Promise<void>((resolve, reject) => {
       server.close((error: Error | undefined) => error ? reject(error) : resolve());
       server.closeAllConnections?.();
@@ -392,7 +402,6 @@ export function codexArguments(baseUrl: string, args: readonly string[]): string
     '-c', 'model_providers.jevcomp.supports_websockets=false',
   ];
   return [
-    '--no-daemon',
     ...args.slice(0, insertionIndex),
     ...providerArgs,
     ...args.slice(insertionIndex),
@@ -418,12 +427,21 @@ function childExit(child: any): Promise<number> {
 export async function runCodex(
   args: readonly string[],
   env: Record<string, string | undefined> = process.env,
-  options: { spawn?: typeof spawn; upstreams?: Destinations; startDashboard?: () => Promise<unknown> } = {},
+  options: { spawn?: typeof spawn; upstreams?: Destinations; startProxy?: typeof startCodexProxy; startDashboard?: () => Promise<unknown> } = {},
 ): Promise<number> {
   try { await options.startDashboard?.(); } catch {}
-  let proxy: Awaited<ReturnType<typeof startCodexProxy>> | undefined;
+  let proxy: { baseUrl: string; close?: () => Promise<void> } | undefined;
+  let ephemeralProxy = false;
   try {
-    proxy = await startCodexProxy(env, options.upstreams);
+    const upstreams = options.upstreams ?? await codexDestinations(env);
+    if (options.startProxy) {
+      proxy = await options.startProxy(env, upstreams);
+      ephemeralProxy = true;
+    } else {
+      const config = JSON.stringify(upstreams);
+      const stable = await ensureAgentProxy('codex', config, env);
+      proxy = { baseUrl: `${stable.url}/v1` };
+    }
   } catch (error) {
     console.error(`jevcomp proxy failed (${error instanceof Error ? error.message : String(error)}); starting plain Codex.`);
   }
@@ -435,6 +453,6 @@ export async function runCodex(
     }, options.spawn ?? spawn);
     return await childExit(child);
   } finally {
-    await proxy?.close();
+    if (ephemeralProxy) await proxy?.close?.();
   }
 }

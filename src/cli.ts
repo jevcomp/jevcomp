@@ -8,13 +8,14 @@ import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compactForClaude } from './claude-compact.js';
 import { runClaude, startClaudeProxy } from './claude-proxy.js';
-import { runCodex } from './codex-proxy.js';
+import { codexDestinations, runCodex, startCodexProxy, type Destinations } from './codex-proxy.js';
 import { commandExists, runSync } from './command.js';
-import { agyCaInstalled, agyCertificateThumbprint, installAgyCa, runAgy, uninstallAgyCa } from './agy-proxy.js';
+import { agyCaInstalled, agyCertificateThumbprint, installAgyCa, runAgy, startAgyProxy, uninstallAgyCa } from './agy-proxy.js';
 import { compactMessages, reductionRatio } from './compact.js';
 import { startDashboard } from './dashboard.js';
 import { dashboardInstancePath, dashboardPort, ensureDashboard, restartDashboard, runningDashboard, stopDashboard } from './dashboard-service.js';
 import { claudeGatewayInstancePath, claudeGatewayPort, stopClaudeGateway } from './claude-gateway-service.js';
+import { agentProxyPort, stopAgentProxy } from './agent-proxy-service.js';
 import { enableFunctionHooks, handleHook } from './hooks.js';
 import { resetUserSettings, setUserSetting, userSettings, type SettingName, type SettingsAgent } from './settings.js';
 import { describeSettings, runSettingsMenu, SETTINGS_ITEMS } from './settings-menu.js';
@@ -206,6 +207,7 @@ async function install(args: readonly string[]): Promise<void> {
   await saveKey(provider);
   if (agents.includes('claude')) { await installClaude(); console.log('Connected to Claude Code. Use `jevcomp claude` for the local model gateway; plain `claude` still uses the Jev compaction hook.'); }
   if (agents.includes('codex')) {
+    await stopAgentProxy('codex', process.env);
     await cleanLegacyCodexInstall();
     await rm(runtimeDir(process.env), { recursive: true, force: true });
     await mkdir(configDir(process.env), { recursive: true, mode: 0o700 });
@@ -214,6 +216,7 @@ async function install(args: readonly string[]): Promise<void> {
   }
   // Last, so a refused Windows certificate prompt cannot stop the other agents from installing.
   if (agents.includes('agy')) {
+    await stopAgentProxy('agy', process.env);
     try { await installAgyCa(); console.log('Connected to Antigravity. Start it with `jevcomp agy`.'); }
     catch (error) {
       process.exitCode = 1;
@@ -234,7 +237,7 @@ async function uninstall(args: readonly string[]): Promise<void> {
   const agyThumbprint = await agyCertificateThumbprint(process.env);
   const agyInstalled = !!agyThumbprint && agyCaInstalled(agyThumbprint);
 
-  if (agents.includes('agy')) await uninstallAgyCa();
+  if (agents.includes('agy')) { await stopAgentProxy('agy', process.env); await uninstallAgyCa(); }
 
   const codexStays = codexInstalled && !agents.includes('codex');
   const claudeStays = claudeInstalled && !agents.includes('claude');
@@ -248,6 +251,7 @@ async function uninstall(args: readonly string[]): Promise<void> {
     console.log(claudeInstalled ? 'jevcomp was removed from Claude Code.' : 'jevcomp was not installed in Claude Code.');
   }
   if (agents.includes('codex')) {
+    await stopAgentProxy('codex', process.env);
     await cleanLegacyCodexInstall();
     await rm(runtimeDir(process.env), { recursive: true, force: true });
     await rm(codexMarker, { force: true });
@@ -296,6 +300,29 @@ async function main(): Promise<void> {
     await writeFile(claudeGatewayInstancePath(port, process.env), JSON.stringify({ pid: process.pid, instanceId, url: proxy.baseUrl, upstream: proxy.upstream, build }), { mode: 0o600 });
     process.stdout.write(`${proxy.baseUrl}
 `);
+    return;
+  }
+  if (cmd === 'codex-proxy') {
+    const requested = flag(args, '--port');
+    const port = requested ? Number(requested) : agentProxyPort('codex', process.env);
+    if (!Number.isInteger(port) || port <= 0 || port >= 65_536) throw new Error('invalid Codex proxy port');
+    const instanceId = process.env.JEVCOMP_AGENT_PROXY_INSTANCE_ID ?? randomUUID();
+    const build = process.env.JEVCOMP_AGENT_PROXY_BUILD ?? '';
+    const config = process.env.JEVCOMP_AGENT_PROXY_CONFIG ?? JSON.stringify(await codexDestinations(process.env));
+    const upstreams = JSON.parse(config) as Destinations;
+    const proxy = await startCodexProxy(process.env, upstreams, { port, instanceId, build, config });
+    process.stdout.write(`${proxy.baseUrl.replace(/\/v1$/, '')}\n`);
+    return;
+  }
+  if (cmd === 'agy-proxy') {
+    const requested = flag(args, '--port');
+    const port = requested ? Number(requested) : agentProxyPort('agy', process.env);
+    if (!Number.isInteger(port) || port <= 0 || port >= 65_536) throw new Error('invalid Antigravity proxy port');
+    const instanceId = process.env.JEVCOMP_AGENT_PROXY_INSTANCE_ID ?? randomUUID();
+    const build = process.env.JEVCOMP_AGENT_PROXY_BUILD ?? '';
+    const config = process.env.JEVCOMP_AGENT_PROXY_CONFIG ?? '{}';
+    const proxy = await startAgyProxy(process.env, { port, instanceId, build, config });
+    process.stdout.write(`${proxy.url}\n`);
     return;
   }
   if (cmd === 'codex') {
