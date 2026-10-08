@@ -32,7 +32,7 @@ export type JevState = Record<string, unknown>;
 export interface JevAnswer { type?: string; noul?: number }
 export interface JevUsage { input_tokens?: number; output_tokens?: number }
 export interface JevResponse { answers: Record<string, JevAnswer>; model?: string; usage?: JevUsage }
-export interface JevAsker { ask(state: JevState, questions: JevQuestions): Promise<JevResponse> }
+export interface JevAsker { ask(state: JevState, questions: JevQuestions, signal?: AbortSignal): Promise<JevResponse> }
 
 export type DecisionAction = 'keep' | 'truncate_result' | 'drop_call';
 export interface CallDecision {

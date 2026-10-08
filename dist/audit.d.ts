@@ -46,7 +46,9 @@ export interface AuditManifest {
     references: Record<string, string>;
     batches: {
         questionsHash: string;
+        stateHash?: string;
         responseHash?: string;
+        stateRef?: string;
         questionsRef?: string;
         responseRef?: string;
     }[];

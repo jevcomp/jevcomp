@@ -46,6 +46,6 @@ export declare class JevClient implements JevAsker {
     constructor(options?: JevClientOptions);
     private config;
     private body;
-    ask(state: JevState, questions: JevQuestions): Promise<JevResponse>;
+    ask(state: JevState, questions: JevQuestions, signal?: AbortSignal): Promise<JevResponse>;
 }
 export declare function noul(answers: JevResponse['answers'], key: string): number;

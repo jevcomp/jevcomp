@@ -7,6 +7,7 @@ export interface AuditCase {
     id: string;
     evaluationId: string;
     callId: string;
+    candidateId: string;
     callKey: string;
     agent: string;
     tool: string;

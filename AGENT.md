@@ -12,6 +12,9 @@
 
 ## Session 2026-10-08
 - Implement Jev compaction batching so oversized histories are judged incrementally instead of failing at maxStateTokens.
+- Bound batch concurrency to 2 and use one 60s wall-clock deadline with cancellation propagated into Jev provider retries.
+- Candidates too large to fit the request budget alone default to drop_call, while fittable candidates continue to be grouped and judged by Jev normally.
+- Guarantee fail-open on provider/batch errors without unhandled promise rejections; oversized single candidates still default to drop_call by design.
 - Do not add tests for this change.
 - Preserve fail-open behavior and existing public configuration.
 - Compile/validate TypeScript only; no new test files.

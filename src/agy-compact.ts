@@ -275,7 +275,7 @@ class PlanAsker implements JevAsker {
     private readonly beforeNetwork?: () => Promise<void>,
   ) {}
 
-  async ask(state: Record<string, unknown>, questions: JevQuestions): Promise<JevResponse> {
+  async ask(state: Record<string, unknown>, questions: JevQuestions, signal?: AbortSignal): Promise<JevResponse> {
     const answers: JevResponse['answers'] = {};
     const external: JevQuestions = {};
     for (const [key, question] of Object.entries(questions)) {
@@ -295,9 +295,11 @@ class PlanAsker implements JevAsker {
     this.providerRequests++;
     try {
       await this.beforeNetwork?.();
+      const questionsHash = digest(JSON.stringify(external));
       observeAudit(this.observer, 'questions', external);
-      const response = await this.delegate.ask(state, external);
-      observeAudit(this.observer, 'response', { questionsHash: digest(JSON.stringify(external)), response });
+      observeAudit(this.observer, 'batchState', { questionsHash, state });
+      const response = await this.delegate.ask(state, external, signal);
+      observeAudit(this.observer, 'response', { questionsHash, response });
       return { ...response, answers: { ...answers, ...response.answers } };
     } catch (error) {
       this.providerFailed = true;
@@ -440,7 +442,7 @@ export async function compactAgyPayload(
   };
   const coreObserver: AuditObserver | undefined = options.auditObserver
     ? (event, value) => {
-      if (event !== 'questions' && event !== 'response' && event !== 'output') observeAudit(options.auditObserver, event, value);
+      if (event !== 'questions' && event !== 'batchState' && event !== 'response' && event !== 'output') observeAudit(options.auditObserver, event, value);
     }
     : undefined;
   const memo = new PlanAsker(asker, candidateMap(pairs), plan.actions, allowNetwork, options.auditObserver, beforeNetwork);

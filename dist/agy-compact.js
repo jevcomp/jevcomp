@@ -211,7 +211,7 @@ class PlanAsker {
         this.observer = observer;
         this.beforeNetwork = beforeNetwork;
     }
-    async ask(state, questions) {
+    async ask(state, questions, signal) {
         const answers = {};
         const external = {};
         for (const [key, question] of Object.entries(questions)) {
@@ -234,9 +234,11 @@ class PlanAsker {
         this.providerRequests++;
         try {
             await this.beforeNetwork?.();
+            const questionsHash = digest(JSON.stringify(external));
             observeAudit(this.observer, 'questions', external);
-            const response = await this.delegate.ask(state, external);
-            observeAudit(this.observer, 'response', { questionsHash: digest(JSON.stringify(external)), response });
+            observeAudit(this.observer, 'batchState', { questionsHash, state });
+            const response = await this.delegate.ask(state, external, signal);
+            observeAudit(this.observer, 'response', { questionsHash, response });
             return { ...response, answers: { ...answers, ...response.answers } };
         }
         catch (error) {
@@ -380,7 +382,7 @@ export async function compactAgyPayload(input, asker, state, options = {}) {
     };
     const coreObserver = options.auditObserver
         ? (event, value) => {
-            if (event !== 'questions' && event !== 'response' && event !== 'output')
+            if (event !== 'questions' && event !== 'batchState' && event !== 'response' && event !== 'output')
                 observeAudit(options.auditObserver, event, value);
         }
         : undefined;

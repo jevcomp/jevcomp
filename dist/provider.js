@@ -167,7 +167,47 @@ function headerDelay(response) {
     const date = Date.parse(value);
     return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
 }
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function abortReason(signal) {
+    return signal.reason instanceof Error ? signal.reason : new Error('Jev request aborted');
+}
+function throwIfAborted(signal) {
+    if (signal?.aborted)
+        throw abortReason(signal);
+}
+function boundedSignal(timeout, external) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('Jev request timed out')), timeout);
+    const onAbort = () => controller.abort(external?.reason ?? new Error('Jev request aborted'));
+    if (external) {
+        if (external.aborted)
+            onAbort();
+        else
+            external.addEventListener('abort', onAbort, { once: true });
+    }
+    return {
+        signal: controller.signal,
+        cleanup: () => {
+            clearTimeout(timer);
+            external?.removeEventListener('abort', onAbort);
+        },
+    };
+}
+async function sleep(ms, signal) {
+    if (ms <= 0)
+        return;
+    throwIfAborted(signal);
+    await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+        const onAbort = () => { cleanup(); reject(abortReason(signal)); };
+        const cleanup = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        if (signal?.aborted)
+            onAbort();
+    });
+}
 export class JevClient {
     options;
     resolved;
@@ -205,32 +245,40 @@ export class JevClient {
         }
         return `{"model":${JSON.stringify(model)},"state":${stateJson},"questions":${JSON.stringify(questions)}}`;
     }
-    async ask(state, questions) {
+    async ask(state, questions, signal) {
         const { model, url, timeout, retries, headers, fetcher } = this.config();
         const body = this.body(model, state, questions);
         for (let attempt = 0;; attempt++) {
+            throwIfAborted(signal);
             let response;
+            let text;
+            const request = boundedSignal(timeout, signal);
             try {
-                response = await fetcher(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeout) });
+                response = await fetcher(url, { method: 'POST', headers, body, signal: request.signal });
+                text = await response.text();
             }
             catch (error) {
                 try {
                     this.options.auditObserver?.('attempt', { attempt, failed: true });
                 }
                 catch { }
+                if (signal?.aborted)
+                    throw abortReason(signal);
                 if (attempt >= retries)
                     throw error;
-                await sleep(Math.min(2_000, 200 * 2 ** attempt));
+                await sleep(Math.min(2_000, 200 * 2 ** attempt), signal);
                 continue;
             }
-            const text = await response.text();
+            finally {
+                request.cleanup();
+            }
             try {
                 this.options.auditObserver?.('attempt', { attempt, status: response.status });
             }
             catch { }
             if (response.ok || attempt >= retries || !retryable(response.status))
                 return parseResponse(response.status, response.ok, text);
-            await sleep(Math.min(2_000, headerDelay(response) ?? 200 * 2 ** attempt));
+            await sleep(Math.min(2_000, headerDelay(response) ?? 200 * 2 ** attempt), signal);
         }
     }
 }

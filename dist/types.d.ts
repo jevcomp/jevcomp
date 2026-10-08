@@ -40,7 +40,7 @@ export interface JevResponse {
     usage?: JevUsage;
 }
 export interface JevAsker {
-    ask(state: JevState, questions: JevQuestions): Promise<JevResponse>;
+    ask(state: JevState, questions: JevQuestions, signal?: AbortSignal): Promise<JevResponse>;
 }
 export type DecisionAction = 'keep' | 'truncate_result' | 'drop_call';
 export interface CallDecision {

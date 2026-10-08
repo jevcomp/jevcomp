@@ -37,7 +37,7 @@ export interface AuditManifest {
   settings: Record<string, unknown>;
   hashes: Record<string, string>;
   references: Record<string, string>;
-  batches: { questionsHash: string; responseHash?: string; questionsRef?: string; responseRef?: string }[];
+  batches: { questionsHash: string; stateHash?: string; responseHash?: string; stateRef?: string; questionsRef?: string; responseRef?: string }[];
   attempts: { attempt: number; status?: number; failed?: boolean }[];
   calls: { id: string; occurrence: number; inputHash: string; resultHashes: string[]; resultLengths: number[]; inputChars: number; messageIndex: number; isError: boolean }[];
   gaps: string[];
@@ -76,6 +76,16 @@ export class AuditCapture {
     if (this.closed) return;
     const start = performance.now();
     try {
+      if (event === 'batchState') {
+        const batchState = value as { questionsHash?: string; state?: unknown };
+        if (!batchState.questionsHash || batchState.state === undefined) return;
+        const stateHash = digest(JSON.stringify(batchState.state));
+        this.manifest.hashes[event] = stateHash;
+        const stateRef = this.manifest.mode === 'evidence' ? this.graph.pack(batchState.state) : undefined;
+        const batch = this.manifest.batches.find(item => item.questionsHash === batchState.questionsHash && !item.stateHash);
+        if (batch) { batch.stateHash = stateHash; batch.stateRef = stateRef; }
+        return;
+      }
       const encoded = JSON.stringify(value);
       const hash = digest(encoded);
       this.manifest.hashes[event] = hash;

@@ -9,7 +9,7 @@ import { estimateTokens, shortenToolResult } from './compact.js';
 import { codexCompactionReductionRatio, renderCodexCompactionSummary } from './codex-compaction.js';
 
 export interface AuditCase {
-  id: string; evaluationId: string; callId: string; callKey: string; agent: string; tool: string;
+  id: string; evaluationId: string; callId: string; candidateId: string; callKey: string; agent: string; tool: string;
   action: string; proposedAction: string; pinned: boolean; dropLoss: number | null; truncateLoss: number | null;
   ruleConforms: boolean | null; originalChars: number; resultChars: number; savedChars: number;
   application: string; tags: string[];
@@ -192,7 +192,7 @@ export async function analyzeAudit(env: Env): Promise<AuditAnalysis> {
       if (decision.action === 'keep' && !decision.pinned && decision.originalChars > 5000) tags.push('large_kept');
       if (expected && expected !== selectedAction) tags.push('policy_mismatch');
       const stableKey = manifest.agent === 'agy' ? manifest.decisionScope?.stableKeys?.[decision.callId] : undefined;
-      cases.push({ id: `${manifest.id}_${ordinal}`, evaluationId: manifest.id, callId: decision.callId,
+      cases.push({ id: `${manifest.id}_${ordinal}`, evaluationId: manifest.id, callId: decision.callId, candidateId: decision.id,
         callKey: `${sessionKey}:${stableKey ?? decision.callId ?? `occurrence:${ordinal}`}`, agent: manifest.agent, tool: decision.name,
         proposedAction: selectedAction, action: manifest.stage === 'rejected' || manifest.stage === 'failed' ? 'not_applied' : decision.action,
         pinned: decision.pinned, dropLoss: decision.pinned ? null : decision.dropLoss, truncateLoss: decision.pinned ? null : decision.truncateLoss,
@@ -255,8 +255,19 @@ export async function inspectAuditCase(env: Env, analysis: AuditAnalysis, id: st
   const manifest = analysis.manifests.find(item => item.id === selected.evaluationId)!;
   const input = await outputMessages(env, manifest, 'input');
   const output = await outputMessages(env, manifest, 'output');
+  let stateReference = manifest.references.state;
+  for (const batch of manifest.batches) {
+    if (!batch.questionsRef) continue;
+    try {
+      const questions = await unpackEvidence(env, batch.questionsRef) as Record<string, unknown>;
+      if (`drop_${selected.candidateId}` in questions || `truncate_${selected.candidateId}` in questions) {
+        stateReference = batch.stateRef ?? stateReference;
+        break;
+      }
+    } catch {}
+  }
   let jevState: any;
-  try { if (manifest.references.state) jevState = await unpackEvidence(env, manifest.references.state); } catch {}
+  try { if (stateReference) jevState = await unpackEvidence(env, stateReference); } catch {}
   const source = analysis.sources.get(manifest.id);
   const later = [];
   for (const match of selected.observation.matches.slice(0, 3)) {
@@ -269,11 +280,11 @@ export async function inspectAuditCase(env: Env, analysis: AuditAnalysis, id: st
   const callIndex = input?.findIndex(message => message.toolCalls.some(call => call.id === selected.callId)) ?? -1;
   const nearbyMessages = callIndex < 0 ? [] : input!.slice(Math.max(0, callIndex - 4), callIndex).map(message => ({ role: message.role, text: message.text }));
   const jevHistory = Array.isArray(jevState?.history) ? jevState.history : [];
-  const observedJevContext = jevHistory.filter((item: any) => JSON.stringify(item).includes(selected.callId)).slice(0, 5);
+  const observedJevContext = jevHistory.filter((item: any) => JSON.stringify(item).includes(selected.candidateId)).slice(0, 5);
   const evaluation = { id: manifest.id, agent: manifest.agent, sessionId: manifest.sessionId, sessionSource: manifest.sessionSource, startedAt: manifest.startedAt, stage: manifest.stage,
     reason: manifest.reason, settings: manifest.settings, version: manifest.version, build: manifest.build, policy: manifest.policy,
     adapterPolicy: manifest.adapterPolicy, decisionScope: manifest.decisionScope, wire: manifest.wire, gaps: manifest.gaps };
-  return { case: selected, evaluation, before: relevant(input), after: relevant(output), nearbyMessages, jevContext: { instructions: jevState?.context, goal: jevState?.goal, matchingEntries: observedJevContext, fullStateReference: manifest.references.state }, later, review, evidenceAvailable: !!input && !!output,
+  return { case: selected, evaluation, before: relevant(input), after: relevant(output), nearbyMessages, jevContext: { instructions: jevState?.context, goal: jevState?.goal, matchingEntries: observedJevContext, fullStateReference: stateReference }, later, review, evidenceAvailable: !!input && !!output,
     reviewQuestions: ['Was information needed at this point or only later?', 'Was it available elsewhere?', 'Was recovery acceptable?', 'Would the retained head and tail suffice?', 'Is there observed harm or only a hypothesis?', 'Which evidence is missing?'] };
 }
 

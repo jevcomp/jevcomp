@@ -269,9 +269,56 @@ function fitQuestionBatch(messages, pinnedCalls, calls, o) {
         throw error;
     }
 }
+const MAX_BATCH_CONCURRENCY = 2;
+const COMPACTION_DEADLINE_MS = 60_000;
+const STATE_STAGE_ORDER = ['full', 'inputs<=200', 'inputs<=60', 'texts abridged', 'old messages collapsed', 'old calls compacted', 'collapsed call markers removed', 'old messages removed', 'old calls merged'];
+function stateStageRank(stage) {
+    if (!stage)
+        return -1;
+    const rank = STATE_STAGE_ORDER.indexOf(stage);
+    return rank < 0 ? STATE_STAGE_ORDER.length : rank;
+}
+function askBeforeDeadline(asker, state, questions, deadline, shared) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0)
+        return Promise.reject(new Error('Jev compaction deadline exceeded'));
+    return new Promise((resolve, reject) => {
+        const controller = new AbortController();
+        let settled = false;
+        let timer;
+        const cleanup = () => {
+            clearTimeout(timer);
+            shared.removeEventListener('abort', onSharedAbort);
+        };
+        const finish = (action) => {
+            if (settled)
+                return;
+            settled = true;
+            cleanup();
+            action();
+        };
+        const onSharedAbort = () => {
+            const error = shared.reason instanceof Error ? shared.reason : new Error('Jev batch cancelled');
+            controller.abort(error);
+            finish(() => reject(error));
+        };
+        if (shared.aborted) {
+            onSharedAbort();
+            return;
+        }
+        shared.addEventListener('abort', onSharedAbort, { once: true });
+        timer = setTimeout(() => {
+            const error = new Error('Jev compaction deadline exceeded');
+            controller.abort(error);
+            finish(() => reject(error));
+        }, remaining);
+        Promise.resolve().then(() => asker.ask(state, questions, controller.signal)).then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
+    });
+}
 function batches(messages, allCalls, candidates, o) {
     const pinnedCalls = allCalls.filter((c) => c.pinned);
-    const out = [];
+    const groups = [];
+    const oversized = [];
     let start = 0;
     while (start < candidates.length) {
         let size = candidates.length - start;
@@ -280,14 +327,18 @@ function batches(messages, allCalls, candidates, o) {
             batch = fitQuestionBatch(messages, pinnedCalls, candidates.slice(start, start + size), o);
             if (batch)
                 break;
-            if (size === 1)
-                throw new Error('A Jev candidate does not fit request budget');
-            size = Math.max(1, Math.floor(size / 2));
+            size = Math.max(0, Math.floor(size / 2));
         }
-        out.push(batch);
-        start += batch.calls.length;
+        if (batch) {
+            groups.push(batch);
+            start += batch.calls.length;
+        }
+        else {
+            oversized.push(candidates[start]);
+            start += 1;
+        }
     }
-    return out;
+    return { groups, oversized };
 }
 async function askBatches(groups, asker, concurrency, observer) {
     const answers = new Map();
@@ -295,14 +346,31 @@ async function askBatches(groups, asker, concurrency, observer) {
     let outputTokens = 0;
     let usageReportedRequests = 0;
     let next = 0;
+    let workerError;
+    const maxConcurrency = Math.min(concurrency, groups.length > 1 ? MAX_BATCH_CONCURRENCY : concurrency);
+    const deadline = Date.now() + COMPACTION_DEADLINE_MS;
+    const abortAll = new AbortController();
     async function worker() {
-        while (next < groups.length) {
+        while (next < groups.length && !workerError) {
             const group = groups[next++];
-            observeAudit(observer, 'state', group.state);
+            const questionsHash = digest(JSON.stringify(group.questions));
+            if (groups.length === 1)
+                observeAudit(observer, 'state', group.state);
             observeAudit(observer, 'questions', group.questions);
-            const res = await asker.ask(group.state, group.questions);
+            observeAudit(observer, 'batchState', { questionsHash, state: group.state });
+            let res;
+            try {
+                res = await askBeforeDeadline(asker, group.state, group.questions, deadline, abortAll.signal);
+            }
+            catch (error) {
+                if (!workerError) {
+                    workerError = error;
+                    abortAll.abort(error);
+                }
+                break;
+            }
             if (observer)
-                observeAudit(observer, 'response', { questionsHash: digest(JSON.stringify(group.questions)), response: res });
+                observeAudit(observer, 'response', { questionsHash, response: res });
             const hasInputUsage = Number.isInteger(res.usage?.input_tokens) && res.usage.input_tokens >= 0;
             const hasOutputUsage = Number.isInteger(res.usage?.output_tokens) && res.usage.output_tokens >= 0;
             if (hasInputUsage || hasOutputUsage)
@@ -317,7 +385,9 @@ async function askBatches(groups, asker, concurrency, observer) {
             }
         }
     }
-    await Promise.all(Array.from({ length: Math.min(concurrency, groups.length) }, () => worker()));
+    await Promise.all(Array.from({ length: Math.min(maxConcurrency, groups.length) }, () => worker()));
+    if (workerError)
+        throw workerError;
     return { answers, inputTokens, outputTokens, usageReportedRequests };
 }
 function safePrefix(text, limit) {
@@ -389,17 +459,26 @@ export async function compact(messages, asker, input = {}) {
     const calls = collect(messages, o.preserveRecentMessages);
     const candidates = calls.filter((c) => !c.pinned);
     observeAudit(input.auditObserver, 'settings', o);
-    const groups = candidates.length ? batches(messages, calls, candidates, o) : [];
-    const largestState = groups.reduce((best, group) => group.stateTokens > best.tokens ? { tokens: group.stateTokens, stage: group.stateStage } : best, { tokens: 0, stage: '' });
-    const judged = candidates.length
+    const { groups, oversized } = candidates.length ? batches(messages, calls, candidates, o) : { groups: [], oversized: [] };
+    const oversizedSet = new Set(oversized.map((c) => c.id));
+    const largestStateTokens = groups.reduce((best, group) => Math.max(best, group.stateTokens), 0);
+    const mostAggressiveStage = groups.reduce((best, group) => stateStageRank(group.stateStage) > stateStageRank(best) ? group.stateStage : best, '');
+    const stateStage = groups.length > 1 ? `batched:${groups.length}:${mostAggressiveStage}` : mostAggressiveStage;
+    const reportedStateStage = oversized.length ? `${stateStage || 'no-fit'};oversized:${oversized.length}` : stateStage;
+    const judged = groups.length
         ? await askBatches(groups, asker, o.maxConcurrentRequests, input.auditObserver)
         : { answers: new Map(), inputTokens: 0, outputTokens: 0, usageReportedRequests: 0 };
+    for (const c of oversized)
+        judged.answers.set(c.id, { dropLoss: 0, truncateLoss: 0 });
     const decisions = calls.map((c) => {
+        const isOversized = oversizedSet.has(c.id);
         const a = judged.answers.get(c.id) ?? { dropLoss: 1, truncateLoss: 1 };
         let action = 'keep';
         // Preserve the base projects' conservative ordering: if losing the result remainder is risky,
         // keep it even if the two independent Jev probabilities are not perfectly monotonic.
-        if (!c.pinned && a.truncateLoss < o.lossThreshold && a.dropLoss >= o.lossThreshold)
+        if (!c.pinned && isOversized)
+            action = 'drop_call';
+        else if (!c.pinned && a.truncateLoss < o.lossThreshold && a.dropLoss >= o.lossThreshold)
             action = 'truncate_result';
         else if (!c.pinned && a.truncateLoss < o.lossThreshold && a.dropLoss < o.lossThreshold)
             action = 'drop_call';
@@ -416,6 +495,6 @@ export async function compact(messages, asker, input = {}) {
     observeAudit(input.auditObserver, 'output', out);
     const before = messages.reduce((n, m) => n + chars(m), 0);
     const after = out.reduce((n, m) => n + chars(m), 0);
-    return { messages: out, decisions, stats: { messagesBefore: messages.length, messagesAfter: out.length, charsBefore: before, charsAfter: after, calls: calls.length, kept: decisions.filter((d) => d.action === 'keep' && !d.pinned).length, resultsTruncated: decisions.filter((d) => d.action === 'truncate_result').length, callsDropped: decisions.filter((d) => d.action === 'drop_call').length, pinned: decisions.filter((d) => d.pinned).length, stateTokens: largestState.tokens, stateStage: groups.length > 1 ? `batched:${groups.length}:${largestState.stage}` : largestState.stage, requests: groups.length, jevInputTokens: judged.inputTokens, jevOutputTokens: judged.outputTokens, jevUsageReportedRequests: judged.usageReportedRequests, ms: Date.now() - started } };
+    return { messages: out, decisions, stats: { messagesBefore: messages.length, messagesAfter: out.length, charsBefore: before, charsAfter: after, calls: calls.length, kept: decisions.filter((d) => d.action === 'keep' && !d.pinned).length, resultsTruncated: decisions.filter((d) => d.action === 'truncate_result').length, callsDropped: decisions.filter((d) => d.action === 'drop_call').length, pinned: decisions.filter((d) => d.pinned).length, stateTokens: largestStateTokens, stateStage: reportedStateStage, requests: groups.length, jevInputTokens: judged.inputTokens, jevOutputTokens: judged.outputTokens, jevUsageReportedRequests: judged.usageReportedRequests, ms: Date.now() - started } };
 }
 export function compactMessages(messages, opts = {}) { return compact(messages, new JevClient({ ...opts, cacheStateSerialization: true }), opts); }
