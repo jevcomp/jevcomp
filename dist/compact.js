@@ -248,34 +248,48 @@ function questions(c, truncateHeadChars, truncateTailChars) {
         },
     };
 }
-function batches(calls, stateTokens, max, truncateHeadChars, truncateTailChars) {
-    const budget = max - stateTokens - 32;
-    if (budget <= 0)
-        throw new Error('Jev state leaves no room for questions');
-    const out = [];
-    let cur = [];
-    let curQuestions = {};
-    let used = 0;
-    for (const c of calls) {
-        const q = questions(c, truncateHeadChars, truncateTailChars);
-        const n = estimateTokens(JSON.stringify(q));
-        if (cur.length && used + n > budget) {
-            out.push({ calls: cur, questions: curQuestions });
-            cur = [];
-            curQuestions = {};
-            used = 0;
-        }
-        if (!cur.length && n > budget)
-            throw new Error('A Jev question does not fit request budget');
-        cur.push(c);
-        Object.assign(curQuestions, q);
-        used += n;
+function questionSet(calls, truncateHeadChars, truncateTailChars) {
+    const out = {};
+    for (const c of calls)
+        Object.assign(out, questions(c, truncateHeadChars, truncateTailChars));
+    return { questions: out, tokens: estimateTokens(JSON.stringify(out)) };
+}
+function fitQuestionBatch(messages, pinnedCalls, calls, o) {
+    const question = questionSet(calls, o.truncateHeadChars, o.truncateTailChars);
+    const stateLimit = Math.min(o.maxStateTokens, o.maxRequestTokens - question.tokens - 32);
+    if (stateLimit < 1000)
+        return undefined;
+    try {
+        const fitted = fitState(messages, [...pinnedCalls, ...calls], { ...o, maxStateTokens: stateLimit });
+        return { calls, questions: question.questions, state: fitted.state, stateTokens: fitted.tokens, stateStage: fitted.stage };
     }
-    if (cur.length)
-        out.push({ calls: cur, questions: curQuestions });
+    catch (error) {
+        if (error instanceof Error && error.message.startsWith('history too large for Jev'))
+            return undefined;
+        throw error;
+    }
+}
+function batches(messages, allCalls, candidates, o) {
+    const pinnedCalls = allCalls.filter((c) => c.pinned);
+    const out = [];
+    let start = 0;
+    while (start < candidates.length) {
+        let size = candidates.length - start;
+        let batch;
+        while (size >= 1) {
+            batch = fitQuestionBatch(messages, pinnedCalls, candidates.slice(start, start + size), o);
+            if (batch)
+                break;
+            if (size === 1)
+                throw new Error('A Jev candidate does not fit request budget');
+            size = Math.max(1, Math.floor(size / 2));
+        }
+        out.push(batch);
+        start += batch.calls.length;
+    }
     return out;
 }
-async function askBatches(groups, state, asker, concurrency, observer) {
+async function askBatches(groups, asker, concurrency, observer) {
     const answers = new Map();
     let inputTokens = 0;
     let outputTokens = 0;
@@ -284,8 +298,9 @@ async function askBatches(groups, state, asker, concurrency, observer) {
     async function worker() {
         while (next < groups.length) {
             const group = groups[next++];
+            observeAudit(observer, 'state', group.state);
             observeAudit(observer, 'questions', group.questions);
-            const res = await asker.ask(state, group.questions);
+            const res = await asker.ask(group.state, group.questions);
             if (observer)
                 observeAudit(observer, 'response', { questionsHash: digest(JSON.stringify(group.questions)), response: res });
             const hasInputUsage = Number.isInteger(res.usage?.input_tokens) && res.usage.input_tokens >= 0;
@@ -374,11 +389,10 @@ export async function compact(messages, asker, input = {}) {
     const calls = collect(messages, o.preserveRecentMessages);
     const candidates = calls.filter((c) => !c.pinned);
     observeAudit(input.auditObserver, 'settings', o);
-    const fitted = candidates.length ? fitState(messages, calls, o) : { state: {}, tokens: 0, stage: '' };
-    observeAudit(input.auditObserver, 'state', fitted.state);
-    const groups = candidates.length ? batches(candidates, fitted.tokens, o.maxRequestTokens, o.truncateHeadChars, o.truncateTailChars) : [];
+    const groups = candidates.length ? batches(messages, calls, candidates, o) : [];
+    const largestState = groups.reduce((best, group) => group.stateTokens > best.tokens ? { tokens: group.stateTokens, stage: group.stateStage } : best, { tokens: 0, stage: '' });
     const judged = candidates.length
-        ? await askBatches(groups, fitted.state, asker, o.maxConcurrentRequests, input.auditObserver)
+        ? await askBatches(groups, asker, o.maxConcurrentRequests, input.auditObserver)
         : { answers: new Map(), inputTokens: 0, outputTokens: 0, usageReportedRequests: 0 };
     const decisions = calls.map((c) => {
         const a = judged.answers.get(c.id) ?? { dropLoss: 1, truncateLoss: 1 };
@@ -402,6 +416,6 @@ export async function compact(messages, asker, input = {}) {
     observeAudit(input.auditObserver, 'output', out);
     const before = messages.reduce((n, m) => n + chars(m), 0);
     const after = out.reduce((n, m) => n + chars(m), 0);
-    return { messages: out, decisions, stats: { messagesBefore: messages.length, messagesAfter: out.length, charsBefore: before, charsAfter: after, calls: calls.length, kept: decisions.filter((d) => d.action === 'keep' && !d.pinned).length, resultsTruncated: decisions.filter((d) => d.action === 'truncate_result').length, callsDropped: decisions.filter((d) => d.action === 'drop_call').length, pinned: decisions.filter((d) => d.pinned).length, stateTokens: fitted.tokens, stateStage: fitted.stage, requests: groups.length, jevInputTokens: judged.inputTokens, jevOutputTokens: judged.outputTokens, jevUsageReportedRequests: judged.usageReportedRequests, ms: Date.now() - started } };
+    return { messages: out, decisions, stats: { messagesBefore: messages.length, messagesAfter: out.length, charsBefore: before, charsAfter: after, calls: calls.length, kept: decisions.filter((d) => d.action === 'keep' && !d.pinned).length, resultsTruncated: decisions.filter((d) => d.action === 'truncate_result').length, callsDropped: decisions.filter((d) => d.action === 'drop_call').length, pinned: decisions.filter((d) => d.pinned).length, stateTokens: largestState.tokens, stateStage: groups.length > 1 ? `batched:${groups.length}:${largestState.stage}` : largestState.stage, requests: groups.length, jevInputTokens: judged.inputTokens, jevOutputTokens: judged.outputTokens, jevUsageReportedRequests: judged.usageReportedRequests, ms: Date.now() - started } };
 }
 export function compactMessages(messages, opts = {}) { return compact(messages, new JevClient({ ...opts, cacheStateSerialization: true }), opts); }
