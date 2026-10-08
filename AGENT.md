@@ -19,3 +19,4 @@
 - Preserve fail-open behavior and existing public configuration.
 - Compile/validate TypeScript only; no new test files.
 - Keep the Claude inference gateway persistent on 127.0.0.1:16392 so background/resumed sessions survive wrapper restarts.
+- Keep Codex and Antigravity jevcomp proxies persistent on stable loopback ports so native background/resume modes do not outlive their interception endpoint. 
