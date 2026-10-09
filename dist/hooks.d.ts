@@ -19,6 +19,6 @@ export declare function jevCompactOptions(env: Record<string, string | undefined
     timeoutMs: number;
     retries: number;
 };
-/** Plugins cannot set environment variables, and Claude Code reads this one only at startup, from the user's settings. */
+/** Plugins cannot set environment variables, and Claude Code reads these only at startup, from the user's settings. */
 export declare function enableFunctionHooks(env: Record<string, string | undefined>): Promise<string>;
 export declare function handleHook(value: unknown, env?: Record<string, string | undefined>, options?: HookOptions): Promise<Record<string, unknown>>;

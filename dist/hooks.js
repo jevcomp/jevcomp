@@ -63,7 +63,24 @@ export function jevCompactOptions(env, agent) {
     };
 }
 const FUNCTION_HOOKS_FLAG = 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS';
-/** Plugins cannot set environment variables, and Claude Code reads this one only at startup, from the user's settings. */
+const ANTHROPIC_BASE_URL = 'ANTHROPIC_BASE_URL';
+function externalClaudeBaseUrl(value) {
+    if (typeof value !== 'string' || !value.trim())
+        return undefined;
+    try {
+        const url = new URL(value.trim());
+        const host = url.hostname.toLowerCase();
+        if (host === '127.0.0.1' || host === 'localhost' || host === '::1')
+            return undefined;
+        if (url.protocol !== 'http:' && url.protocol !== 'https:')
+            return undefined;
+        return value.trim();
+    }
+    catch {
+        return undefined;
+    }
+}
+/** Plugins cannot set environment variables, and Claude Code reads these only at startup, from the user's settings. */
 export async function enableFunctionHooks(env) {
     const path = join(env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'settings.json');
     try {
@@ -78,11 +95,15 @@ export async function enableFunctionHooks(env) {
         if (!settings || typeof settings !== 'object' || Array.isArray(settings))
             throw new Error('not a JSON object');
         const current = settings.env && typeof settings.env === 'object' && !Array.isArray(settings.env) ? settings.env : {};
-        if (current[FUNCTION_HOOKS_FLAG] !== '1') {
+        const baseUrl = externalClaudeBaseUrl(current[ANTHROPIC_BASE_URL])
+            ?? externalClaudeBaseUrl(env[ANTHROPIC_BASE_URL])
+            ?? 'https://api.anthropic.com';
+        const nextEnv = { ...current, [FUNCTION_HOOKS_FLAG]: '1', [ANTHROPIC_BASE_URL]: baseUrl };
+        if (JSON.stringify(nextEnv) !== JSON.stringify(current)) {
             await mkdir(dirname(path), { recursive: true });
-            await writeFile(path, `${JSON.stringify({ ...settings, env: { ...current, [FUNCTION_HOOKS_FLAG]: '1' } }, null, 2)}\n`);
+            await writeFile(path, `${JSON.stringify({ ...settings, env: nextEnv }, null, 2)}\n`);
         }
-        return `jevcomp turned on Claude Code function hooks in ${path}. Restart Claude Code to start using jevcomp.`;
+        return `jevcomp configured Claude Code in ${path}. Restart Claude Code to start using jevcomp.`;
     }
     catch {
         return `jevcomp is off: add "${FUNCTION_HOOKS_FLAG}": "1" under "env" in ${path} and restart Claude Code.`;
