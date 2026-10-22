@@ -262,7 +262,7 @@ test('the first Claude Code session turns function hooks on in the user settings
   const env = { JEVCOMP_DATA_DIR: join(root, 'data'), CLAUDE_PLUGIN_ROOT: root, CLAUDE_CONFIG_DIR: root, TYPESAFE_API_KEY: 'test', JEVCOMP_PROVIDER: 'typesafe' };
   const first = await handleHook({ session_id: 's', hook_event_name: 'SessionStart', source: 'startup' }, env);
   assert.match(first.systemMessage, /Restart Claude Code/);
-  assert.deepEqual(JSON.parse(await readFile(settingsFile, 'utf8')), { model: 'opus', env: { OTHER: 'x', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' } });
+  assert.deepEqual(JSON.parse(await readFile(settingsFile, 'utf8')), { model: 'opus', env: { OTHER: 'x', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } });
 
   await writeFile(settingsFile, '{ broken');
   const broken = await handleHook({ session_id: 's', hook_event_name: 'SessionStart', source: 'startup' }, env);
