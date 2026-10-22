@@ -1,5 +1,5 @@
 import type { Message } from './types.js';
-export declare function appendResponseItem(messages: Message[], value: unknown): void;
+export declare function appendResponseItem(messages: Message[], value: unknown, preserveMediaResults?: boolean): void;
 export declare class UnsupportedCodexRolloutError extends Error {
     constructor(message: string);
 }

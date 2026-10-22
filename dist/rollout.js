@@ -70,7 +70,7 @@ function pushResult(messages, result) {
     else
         messages.push({ role: 'user', text: '', toolCalls: [], toolResults: [result] });
 }
-export function appendResponseItem(messages, value) {
+export function appendResponseItem(messages, value, preserveMediaResults = false) {
     if (!record(value))
         return;
     const type = typeof value.type === 'string' ? value.type : '';
@@ -108,13 +108,18 @@ export function appendResponseItem(messages, value) {
         if (typeof id !== 'string' || !id)
             return;
         const rawOutput = value.output ?? value.result ?? value.content ?? value.tools ?? value;
-        if (hasUnjudgableContent(rawOutput))
+        const nonText = hasUnjudgableContent(rawOutput);
+        const mediaOnly = Array.isArray(rawOutput) && rawOutput.every((part) => record(part)
+            && ['input_text', 'output_text', 'input_image', 'input_audio'].includes(String(part.type))
+            && !part.encrypted_content);
+        if (nonText && (!preserveMediaResults || !mediaOnly))
             throw new UnsupportedCodexRolloutError('non-text tool output cannot be judged by Jev');
         const status = typeof value.status === 'string' ? value.status : '';
         pushResult(messages, {
             callId: id,
-            output: textOf(rawOutput),
+            output: nonText && Array.isArray(rawOutput) ? `${textOf(rawOutput.filter((part) => record(part) && typeof part.text === 'string'))}\n[Media preserved for native compaction; unavailable to text-only Jev.]` : textOf(rawOutput),
             isError: value.is_error === true || status === 'failed' || status === 'error',
+            ...(nonText ? { preserve: true } : {}),
         });
         return;
     }

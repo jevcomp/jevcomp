@@ -11,7 +11,7 @@ import { codexCompactionReductionRatio, codexTurnMetadata, isCodexCompactionRequ
 import { jevCompactOptions } from './hooks.js';
 export { isCodexCompactionRequest } from './codex-compaction.js';
 import { activeRun, assignArm, recordJevTokens, recordUsage, sseTap, type TokenUsage } from './experiment.js';
-import { appendResponseItem } from './rollout.js';
+import { appendResponseItem, UnsupportedCodexRolloutError } from './rollout.js';
 import { userSettings } from './settings.js';
 import { captureDirectory, tryAppendHistory } from './store.js';
 import type { Message } from './types.js';
@@ -234,7 +234,32 @@ function codexUsage(value: unknown): TokenUsage | undefined {
   return { input: Math.max(0, total - cached), cached, cacheWrite: 0, output };
 }
 
-async function localCompaction(body: Uint8Array, env: Record<string, string | undefined>): Promise<{ body: Uint8Array; auditId?: string } | undefined> {
+interface LocalCompaction {
+  body: Uint8Array;
+  auditId?: string;
+  native?: boolean;
+  finish?: (error?: string) => Promise<void>;
+}
+
+function nativeCompactionInput(items: unknown[], result: Awaited<ReturnType<typeof compactMessages>>): unknown[] {
+  const actions = new Map(result.decisions.map((decision) => [decision.callId, decision.action]));
+  const retainedResults = new Map(result.messages.flatMap((message) => message.toolResults ?? []).map((output) => [output.callId, output.output]));
+  return items.flatMap((item) => {
+    if (!record(item)) return [item];
+    const type = String(item.type);
+    if (!type.endsWith('_call') && !type.endsWith('_output')) return [item];
+    const callId = item.call_id ?? item.id;
+    const action = typeof callId === 'string' ? actions.get(callId) : undefined;
+    if (action === 'drop_call') return [];
+    if (action !== 'truncate_result' || typeof callId !== 'string' || !type.endsWith('_output')) return [item];
+    const field = 'output' in item ? 'output' : 'result' in item ? 'result' : 'content';
+    const text = retainedResults.get(callId);
+    if (text === undefined) return [item];
+    return [{ ...item, [field]: Array.isArray(item[field]) ? [{ type: 'input_text', text }] : text }];
+  });
+}
+
+async function localCompaction(body: Uint8Array, env: Record<string, string | undefined>): Promise<LocalCompaction | undefined> {
   const request = JSON.parse(Buffer.from(body).toString('utf8')) as unknown;
   if (!isCodexCompactionRequest(request)) return undefined;
 
@@ -259,7 +284,19 @@ async function localCompaction(body: Uint8Array, env: Record<string, string | un
     return undefined;
   }
   try {
-    for (const item of items.slice(0, -1)) appendResponseItem(messages, item);
+    for (const item of items.slice(0, -1)) appendResponseItem(messages, item, true);
+    const mediaResults = messages.flatMap((message) => message.toolResults ?? []).filter((output) => output.preserve);
+    if (mediaResults.length) {
+      const callCounts = new Map<string, number>();
+      const resultCounts = new Map<string, number>();
+      for (const message of messages) {
+        for (const call of message.toolCalls) callCounts.set(call.id, (callCounts.get(call.id) ?? 0) + 1);
+        for (const output of message.toolResults ?? []) resultCounts.set(output.callId, (resultCounts.get(output.callId) ?? 0) + 1);
+      }
+      for (const output of mediaResults) {
+        if (callCounts.get(output.callId) !== 1 || resultCounts.get(output.callId) !== 1) throw new UnsupportedCodexRolloutError('non-text tool output has no unique paired call');
+      }
+    }
     audit = await beginAudit(env, 'codex', runId, messages, { minReductionRatio: minimum, provider: jev.provider, model: jev.model, maxSummaryTokens: MAX_COMPACTION_SUMMARY_TOKENS }, sessionId);
     if (audit) localRun.auditId = runId;
     if (messages.length < 2) {
@@ -270,6 +307,23 @@ async function localCompaction(body: Uint8Array, env: Record<string, string | un
     const result = await compactMessages(messages, { ...jev, auditObserver: audit?.observe });
     await recordJevTokens(env, 'codex', measured?.unitId, result.stats.jevInputTokens, result.stats.jevOutputTokens);
     const belowMinimum = codexCompactionReductionRatio(messages, result.messages) < minimum;
+    if (mediaResults.length && result.stats.charsAfter >= result.stats.charsBefore) {
+      const recorded = await tryAppendHistory({ ...localRun, status: 'skipped', stats: result.stats, decisions: result.decisions, detail: 'no_text_cuts; original media left to native compaction' }, env);
+      await audit?.finish('rejected', 'no_text_cuts', recorded);
+      return undefined;
+    }
+    if (mediaResults.length && !belowMinimum) {
+      const nativeBody = Buffer.from(JSON.stringify({ ...payload, input: nativeCompactionInput(items, result) }), 'utf8');
+      const recorded = await tryAppendHistory({ ...localRun, status: 'prepared', stats: result.stats, decisions: result.decisions, detail: 'Jev pruned text tools; original media retained for native compaction' }, env);
+      await audit?.finish('evaluated', 'native_compaction_pending', recorded);
+      return {
+        body: nativeBody, native: true, auditId: audit?.manifest.id,
+        finish: async (error) => {
+          const postRecorded = await tryAppendHistory({ ...localRun, phase: 'postcompact', status: error ? 'failed' : 'restored', stats: result.stats, detail: error ?? 'Native model completed compaction of Jev-pruned history with original media' }, env);
+          await audit?.finish(error ? 'failed' : 'result_produced', error ? 'native_compaction_failed' : 'native_compaction_completed', recorded && postRecorded);
+        },
+      };
+    }
     const summary = belowMinimum ? '' : renderCodexCompactionSummary(result.messages);
     const outputTokens = belowMinimum ? 0 : estimateTokens(summary);
     const rejection = belowMinimum ? 'below_minimum' : !summary.trim() ? 'empty_output' : outputTokens > MAX_COMPACTION_SUMMARY_TOKENS ? 'output_too_large' : undefined;
@@ -306,7 +360,8 @@ export async function startCodexProxy(
       return;
     }
     void (async () => {
-      const body = await requestBody(request);
+      let body = await requestBody(request);
+      let nativeCompaction: LocalCompaction | undefined;
       const { path, search } = requestPath(request.url ?? '/');
       let measuredTurn: { sessionId?: string; model?: string; compaction: boolean } | undefined;
       if (request.method === 'POST' && path === '/responses' && await activeRun(env, 'codex')) {
@@ -319,11 +374,14 @@ export async function startCodexProxy(
         try {
           await captureBody(env, body);
         } catch {}
-        let localResponse: { body: Uint8Array; auditId?: string } | undefined;
+        let localResponse: LocalCompaction | undefined;
         try {
           localResponse = await localCompaction(body, env);
         } catch {}
-        if (localResponse) {
+        if (localResponse?.native) {
+          body = localResponse.body;
+          nativeCompaction = localResponse;
+        } else if (localResponse) {
           response.writeHead(200, {
             'content-type': 'text/event-stream; charset=utf-8',
             'cache-control': 'no-cache, no-transform',
@@ -347,6 +405,14 @@ export async function startCodexProxy(
         if (!response.writableEnded) controller.abort();
       });
       request.once('aborted', () => controller.abort());
+      let nativeCompleted = false;
+      const finishNative = (error?: string) => {
+        if (nativeCompleted || !nativeCompaction?.finish) return;
+        nativeCompleted = true;
+        const pending = nativeCompaction.finish(error).catch(() => {});
+        pendingAuditEvents.add(pending);
+        void pending.finally(() => pendingAuditEvents.delete(pending));
+      };
 
       try {
         const upstream = await fetch(target, {
@@ -356,12 +422,20 @@ export async function startCodexProxy(
           redirect: 'manual',
           signal: controller.signal,
         });
+        if (!upstream.ok) finishNative(`Native compaction returned HTTP ${upstream.status}`);
         let usage: TokenUsage | undefined;
-        const tap = measuredTurn?.sessionId ? sseTap((event) => { usage = codexUsage(event) ?? usage; }) : undefined;
+        const tap = measuredTurn?.sessionId || nativeCompaction ? sseTap((event) => {
+          usage = codexUsage(event) ?? usage;
+          if (!record(event)) return;
+          if (event.type === 'response.completed' && record(event.response) && event.response.status === 'completed') finishNative();
+          else if (['response.failed', 'response.incomplete', 'error'].includes(String(event.type))) finishNative(`Native compaction returned ${event.type}`);
+        }) : undefined;
         // Codex may hang up right after `response.completed`, which aborts the stream before it ends normally.
         try { await streamResponse(upstream, response, tap); }
         finally { if (tap && measuredTurn) await recordUsage(env, 'codex', measuredTurn.sessionId, usage, measuredTurn.model, measuredTurn.compaction); }
+        finishNative('Native compaction ended without response.completed');
       } catch {
+        finishNative('Native compaction transport failed');
         sendFailure(response, 502, 'Upstream request failed');
       }
     })().catch(() => sendFailure(response, 502, 'Proxy request failed'));
@@ -388,18 +462,32 @@ export async function startCodexProxy(
   };
 }
 
-export function codexArguments(baseUrl: string, args: readonly string[]): string[] {
+async function codexHistoryProvider(env: Record<string, string | undefined>): Promise<string> {
+  const codexHome = env.CODEX_HOME?.trim() || join(homedir(), '.codex');
+  let config: string;
+  try { config = await readFile(join(codexHome, 'config.toml'), 'utf8'); }
+  catch { return 'jevcomp'; }
+  for (const line of config.split(/\r?\n/)) {
+    if (/^\s*\[/.test(line)) break;
+    const match = /^\s*model_provider\s*=\s*(["'])([\w-]+)\1\s*(?:#.*)?$/.exec(line);
+    if (match?.[2]) return ['openai', 'ollama', 'lmstudio'].includes(match[2]) ? 'jevcomp' : match[2];
+  }
+  return 'jevcomp';
+}
+
+export function codexArguments(baseUrl: string, args: readonly string[], providerId = 'jevcomp'): string[] {
   const [command, subcommand] = args;
   const insertionIndex = command === 'exec' || command === 'e'
     ? ['resume', 'review', 'fork'].includes(subcommand ?? '') ? 2 : 1
     : ['resume', 'review', 'fork'].includes(command ?? '') ? 1 : 0;
   const providerArgs = [
-    '-c', 'model_provider="jevcomp"',
-    '-c', 'model_providers.jevcomp.name="jevcomp"',
-    '-c', `model_providers.jevcomp.base_url=${JSON.stringify(baseUrl)}`,
-    '-c', 'model_providers.jevcomp.requires_openai_auth=true',
-    '-c', 'model_providers.jevcomp.wire_api="responses"',
-    '-c', 'model_providers.jevcomp.supports_websockets=false',
+    '-c', `model_provider=${JSON.stringify(providerId)}`,
+    '-c', `model_providers.${providerId}.name="jevcomp"`,
+    '-c', `model_providers.${providerId}.base_url=${JSON.stringify(baseUrl)}`,
+    '-c', `model_providers.${providerId}.requires_openai_auth=true`,
+    '-c', `model_providers.${providerId}.wire_api="responses"`,
+    '-c', `model_providers.${providerId}.supports_websockets=false`,
+    '-c', `model_providers.${providerId}.capabilities.remote_compaction="unsupported"`,
   ];
   return [
     ...args.slice(0, insertionIndex),
@@ -446,7 +534,7 @@ export async function runCodex(
     console.error(`jevcomp proxy failed (${error instanceof Error ? error.message : String(error)}); starting plain Codex.`);
   }
   try {
-    const child = launch('codex', proxy ? codexArguments(proxy.baseUrl, args) : [...args], {
+    const child = launch('codex', proxy ? codexArguments(proxy.baseUrl, args, await codexHistoryProvider(env)) : [...args], {
       env,
       stdio: 'inherit',
       windowsHide: true,

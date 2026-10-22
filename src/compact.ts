@@ -124,7 +124,7 @@ function collect(messages: readonly Message[], recent: number): Candidate[] {
     const inputText = stringify(call.input);
     out.push({ id: `t${out.length + 1}`, callId: call.id, name: call.name, input: call.input, inputText, inputPreview: inputPreviewFromText(inputText), callIndex, resultIndex: found.index,
       resultChars: found.result.output.length, resultText: found.result.output, resultPreview: resultPreview(found.result.output), isError: !!found.result.isError,
-      pinned: pinned(callIndex, messages.length, recent) || pinned(found.index, messages.length, recent) });
+      pinned: found.result.preserve === true || pinned(callIndex, messages.length, recent) || pinned(found.index, messages.length, recent) });
   }));
   return out;
 }

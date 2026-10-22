@@ -13,7 +13,7 @@ export declare function startCodexProxy(env?: Record<string, string | undefined>
     baseUrl: string;
     close: () => Promise<void>;
 }>;
-export declare function codexArguments(baseUrl: string, args: readonly string[]): string[];
+export declare function codexArguments(baseUrl: string, args: readonly string[], providerId?: string): string[];
 export declare function runCodex(args: readonly string[], env?: Record<string, string | undefined>, options?: {
     spawn?: typeof spawn;
     upstreams?: Destinations;

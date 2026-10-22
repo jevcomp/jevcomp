@@ -8,6 +8,7 @@ export interface ToolResult {
     callId: string;
     output: string;
     isError?: boolean;
+    preserve?: boolean;
 }
 export interface Message {
     role: Role;

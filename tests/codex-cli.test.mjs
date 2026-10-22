@@ -102,6 +102,7 @@ test('provider config follows each supported Codex command path and preserves us
     '-c', 'model_providers.jevcomp.requires_openai_auth=true',
     '-c', 'model_providers.jevcomp.wire_api="responses"',
     '-c', 'model_providers.jevcomp.supports_websockets=false',
+    '-c', 'model_providers.jevcomp.capabilities.remote_compaction="unsupported"',
   ];
   const vectors = [
     { args: ['exec', '--skip-git-repo-check', '-c', 'model_auto_compact_token_limit=30000', 'prompt'], before: 1 },
